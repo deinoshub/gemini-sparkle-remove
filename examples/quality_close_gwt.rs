@@ -1,5 +1,5 @@
 //! quality-close-gwt: process 8e9d4f77 with polarity-aware residual kill.
-use gemini_sparkle_remove::video::{ffmpeg_available, remove_video, VideoRemoveOptions};
+use gemini_unmark::video::{ffmpeg_available, remove_video, VideoRemoveOptions};
 use std::path::Path;
 use std::time::Instant;
 

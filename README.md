@@ -1,6 +1,6 @@
-# gemini-sparkle-remove
+# gemini-unmark
 
-[![CI](https://github.com/deinoshub/gemini-sparkle-remove/actions/workflows/ci.yml/badge.svg)](https://github.com/deinoshub/gemini-sparkle-remove/actions/workflows/ci.yml)
+[![CI](https://github.com/deinoshub/gemini-unmark/actions/workflows/ci.yml/badge.svg)](https://github.com/deinoshub/gemini-unmark/actions/workflows/ci.yml)
 
 Rust library that removes Gemini visible sparkle watermarks from RGBA buffers via reverse alpha-blend.
 
@@ -8,7 +8,7 @@ Pure Rust runtime (no Python). MIT licensed.
 
 Port of [long66666/gemini-watermark-remover](https://github.com/long66666/gemini-watermark-remover), plus GWT/Veo-style video ideas (diamond reverse-blend, adaptive alpha, FDnCNN ROI cleanup).
 
-Repository: [deinoshub/gemini-sparkle-remove](https://github.com/deinoshub/gemini-sparkle-remove).
+Repository: [deinoshub/gemini-unmark](https://github.com/deinoshub/gemini-unmark).
 
 ## Requirements
 
@@ -16,9 +16,9 @@ Repository: [deinoshub/gemini-sparkle-remove](https://github.com/deinoshub/gemin
 |------|--------|
 | Default (still images) | Rust toolchain (`cargo`) |
 | Feature `video` | Rust + **ffmpeg** / **ffprobe** (downloaded at build time for common targets by default, or on `PATH`) |
-| Feature `video` + `system-ffmpeg` | Same APIs; **no** build-time download — uses `GSR_FFMPEG`/`GSR_FFPROBE` then `PATH` only |
+| Feature `video` + `system-ffmpeg` | Same APIs; **no** build-time download — uses `GUM_FFMPEG`/`GUM_FFPROBE` then `PATH` only |
 | Feature `video-fdncnn` | Above + CMake + C++ compiler + git (first clone). `build.rs` cmake-builds Tencent/ncnn **per TARGET** (OpenMP off). Tag **`20260526`**. |
-| Feature `cli` | `video-fdncnn` + `system-ffmpeg` + `clap`. Binary: `gemini-sparkle-remove`. |
+| Feature `cli` | `video-fdncnn` + `system-ffmpeg` + `clap`. Binary: `gunmark`. |
 
 No `python3`, OpenCV, or system ncnn Python bindings.
 
@@ -42,12 +42,12 @@ Opt out of download (keep download as default for `video`):
 
 ```bash
 cargo build --features video                  # downloads tools (default)
-cargo build --features video,system-ffmpeg    # system PATH / GSR_* only
+cargo build --features video,system-ffmpeg    # system PATH / GUM_* only
 cargo build --features video-fdncnn,system-ffmpeg
-cargo build --release --features cli --bin gemini-sparkle-remove
+cargo build --release --features cli --bin gunmark
 ```
 
-Also: set `GSR_SKIP_FFMPEG_DOWNLOAD=1` to skip download without the feature (still uses an existing cache if present). Provide tools on `PATH`, or set `GSR_FFMPEG` / `GSR_FFPROBE` to absolute binary paths. If tools are missing, `remove_video` returns a clear error.
+Also: set `GUM_SKIP_FFMPEG_DOWNLOAD=1` to skip download without the feature (still uses an existing cache if present). Provide tools on `PATH`, or set `GUM_FFMPEG` / `GUM_FFPROBE` to absolute binary paths. If tools are missing, `remove_video` returns a clear error.
 
 Runtime resolution order: env override → build-time vendored paths (unless `system-ffmpeg`) → `PATH`.
 
@@ -56,21 +56,21 @@ Runtime resolution order: env override → build-time vendored paths (unless `sy
 ### Path dependency
 
 ```toml
-gemini-sparkle-remove = { path = "../gemini-sparkle-remove" }
+gemini-unmark = { path = "../gemini-unmark" }
 
 # video (downloads ffmpeg tools at build when online):
-gemini-sparkle-remove = { path = "../gemini-sparkle-remove", features = ["video"] }
+gemini-unmark = { path = "../gemini-unmark", features = ["video"] }
 
-# video without downloading ffmpeg (system PATH / GSR_* only):
-gemini-sparkle-remove = { path = "../gemini-sparkle-remove", features = ["video", "system-ffmpeg"] }
+# video without downloading ffmpeg (system PATH / GUM_* only):
+gemini-unmark = { path = "../gemini-unmark", features = ["video", "system-ffmpeg"] }
 
 # + in-process FDnCNN (cmake-builds ncnn for the target):
-gemini-sparkle-remove = { path = "../gemini-sparkle-remove", features = ["video-fdncnn"] }
+gemini-unmark = { path = "../gemini-unmark", features = ["video-fdncnn"] }
 ```
 
 ### CLI (feature = `"cli"`)
 
-Needs **ffmpeg** / **ffprobe** on `PATH` (or `GSR_FFMPEG` / `GSR_FFPROBE`) and CMake the first time ncnn is built.
+Needs **ffmpeg** / **ffprobe** on `PATH` (or `GUM_FFMPEG` / `GUM_FFPROBE`) and CMake the first time ncnn is built.
 
 ```bash
 cargo run --release --features cli -- input.png output.png
@@ -85,7 +85,7 @@ GitHub Releases attach prebuilt binaries for Linux x86_64, macOS aarch64, and Wi
 RGBA, 4 bytes/pixel, row-major (`data.len() == width * height * 4`). You own encode/decode.
 
 ```rust
-use gemini_sparkle_remove::{remove_at, remove_gemini_sparkle, RemoveResult, RgbaImage};
+use gemini_unmark::{remove_at, remove_gemini_sparkle, RemoveResult, RgbaImage};
 
 let mut img = RgbaImage {
     width,
@@ -103,7 +103,7 @@ remove_at(&mut img, x, y);
 ### Video API (feature = `"video"`)
 
 ```rust
-use gemini_sparkle_remove::video::{
+use gemini_unmark::video::{
     remove_video, MarkKind, VideoRemoveOptions,
 };
 

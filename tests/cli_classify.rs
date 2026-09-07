@@ -1,4 +1,4 @@
-use gemini_sparkle_remove::cli::{classify_input, InputKind};
+use gemini_unmark::cli::{classify_input, InputKind};
 use std::path::Path;
 
 #[test]

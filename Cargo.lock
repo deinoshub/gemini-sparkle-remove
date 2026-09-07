@@ -410,7 +410,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "gemini-sparkle-remove"
+name = "gemini-unmark"
 version = "0.1.0"
 dependencies = [
  "cc",

@@ -1,5 +1,5 @@
 //! Batch-run video-fdncnn on all user test clips → rust-crate-test/batch-all/
-use gemini_sparkle_remove::video::{ffmpeg_available, remove_video, VideoRemoveOptions};
+use gemini_unmark::video::{ffmpeg_available, remove_video, VideoRemoveOptions};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -188,7 +188,7 @@ fn main() {
 
     let summary = format!(
         "# Batch FDnCNN (in-process) — all user test videos\n\n\
-         Crate: gemini-sparkle-remove\n\
+         Crate: gemini-unmark\n\
          Feature: `video-fdncnn` (NcnnDenoiser in-process)\n\
          Output: `/workspace/rust-crate-test/batch-all/`\n\
          Date: 2026-09-07 Asia/Saigon\n\n\

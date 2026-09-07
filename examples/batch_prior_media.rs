@@ -1,10 +1,10 @@
 //! Batch-test prior conversation media with this crate.
-use gemini_sparkle_remove::{remove_at, remove_gemini_sparkle, RemoveResult, RgbaImage};
+use gemini_unmark::{remove_at, remove_gemini_sparkle, RemoveResult, RgbaImage};
 use image::ImageReader;
 use std::path::{Path, PathBuf};
 
 #[cfg(feature = "video")]
-use gemini_sparkle_remove::video::{remove_video, VideoRemoveOptions};
+use gemini_unmark::video::{remove_video, VideoRemoveOptions};
 
 fn process_image(src: &Path, dst: &Path) -> String {
     let img = ImageReader::open(src)

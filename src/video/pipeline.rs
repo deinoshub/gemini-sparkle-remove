@@ -3,7 +3,7 @@
 //! Frames stay in memory as RGBA (no PNG extract/re-encode). FDnCNN (feature
 //! `video-fdncnn`) runs in-process via bundled libncnn — no Python runtime.
 //!
-//! ffmpeg/ffprobe resolution order: `GSR_FFMPEG`/`GSR_FFPROBE` env (runtime
+//! ffmpeg/ffprobe resolution order: `GUM_FFMPEG`/`GUM_FFPROBE` env (runtime
 //! override) → build-time vendored paths (`option_env!`, skipped when feature
 //! `system-ffmpeg`) → binaries named `ffmpeg`/`ffprobe` on `PATH`.
 
@@ -216,9 +216,9 @@ struct ProbeInfo {
 fn ffmpeg_tool_path(kind: &str) -> PathBuf {
     // 1) Runtime override
     let env_key = if kind == "ffmpeg" {
-        "GSR_FFMPEG"
+        "GUM_FFMPEG"
     } else {
-        "GSR_FFPROBE"
+        "GUM_FFPROBE"
     };
     if let Ok(p) = std::env::var(env_key) {
         let pb = PathBuf::from(&p);
@@ -230,9 +230,9 @@ fn ffmpeg_tool_path(kind: &str) -> PathBuf {
     #[cfg(not(feature = "system-ffmpeg"))]
     {
         let build_path = if kind == "ffmpeg" {
-            option_env!("GSR_FFMPEG")
+            option_env!("GUM_FFMPEG")
         } else {
-            option_env!("GSR_FFPROBE")
+            option_env!("GUM_FFPROBE")
         };
         if let Some(p) = build_path {
             let pb = PathBuf::from(p);
@@ -259,11 +259,11 @@ fn ffprobe_bin() -> PathBuf {
 fn missing_ffmpeg_hint() -> &'static str {
     #[cfg(feature = "system-ffmpeg")]
     {
-        "Feature `system-ffmpeg` is enabled (no build-time download).          Install ffmpeg/ffprobe on PATH, or set GSR_FFMPEG / GSR_FFPROBE to absolute paths."
+        "Feature `system-ffmpeg` is enabled (no build-time download).          Install ffmpeg/ffprobe on PATH, or set GUM_FFMPEG / GUM_FFPROBE to absolute paths."
     }
     #[cfg(not(feature = "system-ffmpeg"))]
     {
-        "Build with feature `video` to download static tools, install on PATH,          or set GSR_FFMPEG / GSR_FFPROBE. Offline: GSR_SKIP_FFMPEG_DOWNLOAD=1 skips download;          or use `--features video,system-ffmpeg` for PATH-only."
+        "Build with feature `video` to download static tools, install on PATH,          or set GUM_FFMPEG / GUM_FFPROBE. Offline: GUM_SKIP_FFMPEG_DOWNLOAD=1 skips download;          or use `--features video,system-ffmpeg` for PATH-only."
     }
 }
 

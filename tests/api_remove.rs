@@ -1,6 +1,6 @@
 //! Integration tests for the public remove API.
 
-use gemini_sparkle_remove::{remove_at, remove_gemini_sparkle, RemoveResult, RgbaImage};
+use gemini_unmark::{remove_at, remove_gemini_sparkle, RemoveResult, RgbaImage};
 
 fn load_rgba(path: &str) -> (u32, u32, Vec<u8>) {
     let img = image::open(path).unwrap_or_else(|e| panic!("open {path}: {e}"));

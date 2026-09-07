@@ -10,7 +10,7 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
-  GSR_SKIP_FFMPEG_DOWNLOAD: "1"
+  GUM_SKIP_FFMPEG_DOWNLOAD: "1"
   CMAKE_BUILD_PARALLEL_LEVEL: "2"
   CARGO_BUILD_JOBS: "2"
   JOBS: "2"
@@ -59,13 +59,13 @@ jobs:
       - name: Checksums
         run: |
           set -euo pipefail
-          crate="target/package/gemini-sparkle-remove-${VERSION}.crate"
+          crate="target/package/gemini-unmark-${VERSION}.crate"
           sha256sum "$crate" | tee SHA256SUMS.txt
       - uses: actions/upload-artifact@v4
         with:
           name: crate
           path: |
-            target/package/gemini-sparkle-remove-*.crate
+            target/package/gemini-unmark-*.crate
             SHA256SUMS.txt
 
   bin:
@@ -77,11 +77,11 @@ jobs:
       matrix:
         include:
           - os: ubuntu-latest
-            artifact: gemini-sparkle-remove-linux-x86_64
+            artifact: gunmark-linux-x86_64
           - os: macos-latest
-            artifact: gemini-sparkle-remove-macos-aarch64
+            artifact: gunmark-macos-aarch64
           - os: windows-latest
-            artifact: gemini-sparkle-remove-windows-x86_64.exe
+            artifact: gunmark-windows-x86_64.exe
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -108,14 +108,14 @@ jobs:
           echo "TARGET=$TARGET"
           bash scripts/build_ncnn_static.sh
       - name: Build CLI
-        run: cargo build --release --features cli --bin gemini-sparkle-remove
+        run: cargo build --release --features cli --bin gunmark
       - name: Stage binary
         shell: bash
         run: |
-          if [ -f target/release/gemini-sparkle-remove.exe ]; then
-            cp target/release/gemini-sparkle-remove.exe "${{ matrix.artifact }}"
+          if [ -f target/release/gunmark.exe ]; then
+            cp target/release/gunmark.exe "${{ matrix.artifact }}"
           else
-            cp target/release/gemini-sparkle-remove "${{ matrix.artifact }}"
+            cp target/release/gunmark "${{ matrix.artifact }}"
           fi
       - uses: actions/upload-artifact@v4
         with:

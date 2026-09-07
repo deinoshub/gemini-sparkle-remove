@@ -1,8 +1,8 @@
 //! Build script:
 //! - feature `video`: download static ffmpeg+ffprobe for TARGET into
-//!   `third_party/ffmpeg/<version>/<triple>/` and emit `GSR_FFMPEG` / `GSR_FFPROBE`.
+//!   `third_party/ffmpeg/<version>/<triple>/` and emit `GUM_FFMPEG` / `GUM_FFPROBE`.
 //! - feature `system-ffmpeg` (with `video`): skip download; runtime uses
-//!   `GSR_FFMPEG`/`GSR_FFPROBE` then PATH only. Env `GSR_SKIP_FFMPEG_DOWNLOAD=1`
+//!   `GUM_FFMPEG`/`GUM_FFPROBE` then PATH only. Env `GUM_SKIP_FFMPEG_DOWNLOAD=1`
 //!   is an extra override that also skips download.
 //! - feature `video-fdncnn`: cmake-build static CPU ncnn for TARGET and link
 //!   the C++ Option shim. No libgomp.
@@ -231,15 +231,15 @@ fn cmake_bin() -> PathBuf {
 }
 
 fn setup_ffmpeg() {
-    println!("cargo:rerun-if-env-changed=GSR_SKIP_FFMPEG_DOWNLOAD");
-    println!("cargo:rerun-if-changed=GSR_FFMPEG");
-    println!("cargo:rerun-if-changed=GSR_FFPROBE");
+    println!("cargo:rerun-if-env-changed=GUM_SKIP_FFMPEG_DOWNLOAD");
+    println!("cargo:rerun-if-env-changed=GUM_FFMPEG");
+    println!("cargo:rerun-if-env-changed=GUM_FFPROBE");
 
     // Feature `system-ffmpeg`: never download and never emit vendored paths.
-    // Runtime uses GSR_FFMPEG/GSR_FFPROBE then PATH only.
+    // Runtime uses GUM_FFMPEG/GUM_FFPROBE then PATH only.
     if env::var("CARGO_FEATURE_SYSTEM_FFMPEG").is_ok() {
         println!(
-            "cargo:warning=feature `system-ffmpeg` — skipping ffmpeg download;              runtime uses GSR_FFMPEG/GSR_FFPROBE then PATH"
+            "cargo:warning=feature `system-ffmpeg` — skipping ffmpeg download;              runtime uses GUM_FFMPEG/GUM_FFPROBE then PATH"
         );
         return;
     }
@@ -259,7 +259,7 @@ fn setup_ffmpeg() {
     let ffmpeg_path = cache_root.join(ffmpeg_name);
     let ffprobe_path = cache_root.join(ffprobe_name);
 
-    let skip = env::var("GSR_SKIP_FFMPEG_DOWNLOAD").ok().as_deref() == Some("1");
+    let skip = env::var("GUM_SKIP_FFMPEG_DOWNLOAD").ok().as_deref() == Some("1");
 
     if ffmpeg_path.is_file() && ffprobe_path.is_file() {
         emit_ffmpeg_env(&ffmpeg_path, &ffprobe_path);
@@ -268,7 +268,7 @@ fn setup_ffmpeg() {
 
     if skip {
         println!(
-            "cargo:warning=GSR_SKIP_FFMPEG_DOWNLOAD=1 — not downloading ffmpeg;              runtime will use PATH or fail if missing"
+            "cargo:warning=GUM_SKIP_FFMPEG_DOWNLOAD=1 — not downloading ffmpeg;              runtime will use PATH or fail if missing"
         );
         return;
     }
@@ -276,7 +276,7 @@ fn setup_ffmpeg() {
     let Some(spec) = ffmpeg_download_spec(&target) else {
         println!(
             "cargo:warning=no static ffmpeg bundle mapped for target {target}; \
-             install ffmpeg/ffprobe on PATH or set GSR_FFMPEG / GSR_FFPROBE"
+             install ffmpeg/ffprobe on PATH or set GUM_FFMPEG / GUM_FFPROBE"
         );
         return;
     };
@@ -284,7 +284,7 @@ fn setup_ffmpeg() {
     if let Err(e) = download_ffmpeg_bundle(&cache_root, &spec, ffmpeg_name, ffprobe_name) {
         println!(
             "cargo:warning=ffmpeg download failed ({e}); \
-             runtime will fall back to PATH (set GSR_SKIP_FFMPEG_DOWNLOAD=1 to silence)"
+             runtime will fall back to PATH (set GUM_SKIP_FFMPEG_DOWNLOAD=1 to silence)"
         );
         return;
     }
@@ -295,8 +295,8 @@ fn setup_ffmpeg() {
 }
 
 fn emit_ffmpeg_env(ffmpeg: &Path, ffprobe: &Path) {
-    println!("cargo:rustc-env=GSR_FFMPEG={}", ffmpeg.display());
-    println!("cargo:rustc-env=GSR_FFPROBE={}", ffprobe.display());
+    println!("cargo:rustc-env=GUM_FFMPEG={}", ffmpeg.display());
+    println!("cargo:rustc-env=GUM_FFPROBE={}", ffprobe.display());
     println!("cargo:rerun-if-changed={}", ffmpeg.display());
     println!("cargo:rerun-if-changed={}", ffprobe.display());
 }

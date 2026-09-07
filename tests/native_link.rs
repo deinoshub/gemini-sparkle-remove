@@ -1,5 +1,5 @@
 //! Linker extras for static ncnn must be per-target and must not assume libgomp.
-use gemini_sparkle_remove::native_link::{ncnn_link_spec, NcnnExtraLib};
+use gemini_unmark::native_link::{ncnn_link_spec, NcnnExtraLib};
 
 #[test]
 fn linux_gnu_links_pthread_libstdcxx_not_gomp() {

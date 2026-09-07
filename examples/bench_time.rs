@@ -1,5 +1,5 @@
 
-use gemini_sparkle_remove::video::{remove_video, VideoRemoveOptions};
+use gemini_unmark::video::{remove_video, VideoRemoveOptions};
 use std::time::Instant;
 fn main() {
     let args: Vec<_> = std::env::args().collect();

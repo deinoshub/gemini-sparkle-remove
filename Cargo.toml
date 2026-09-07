@@ -1,10 +1,10 @@
 [package]
-name = "gemini-sparkle-remove"
+name = "gemini-unmark"
 version = "0.1.0"
 edition = "2021"
 license = "MIT"
 description = "Remove Gemini visible sparkle watermarks via reverse alpha-blend (pure Rust)"
-repository = "https://github.com/deinoshub/gemini-sparkle-remove"
+repository = "https://github.com/deinoshub/gemini-unmark"
 readme = "README.md"
 exclude = [
     "docs/superpowers",
@@ -20,7 +20,7 @@ exclude = [
 [features]
 default = []
 video = ["dep:tempfile", "dep:image", "dep:rayon"]
-# Skip build-time ffmpeg/ffprobe download; runtime uses GSR_FFMPEG/GSR_FFPROBE
+# Skip build-time ffmpeg/ffprobe download; runtime uses GUM_FFMPEG/GUM_FFPROBE
 # then PATH only. Combine with `video` or `video-fdncnn`.
 system-ffmpeg = []
 # FDnCNN (NcnnDenoiser) ROI postpass after reverse-blend. Requires `video` and
@@ -39,7 +39,7 @@ clap = { version = "4", features = ["derive"], optional = true }
 image = "0.25"
 
 [[bin]]
-name = "gemini-sparkle-remove"
+name = "gunmark"
 path = "src/main.rs"
 required-features = ["cli"]
 

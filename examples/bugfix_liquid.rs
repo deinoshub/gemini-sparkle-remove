@@ -1,5 +1,5 @@
 //! Reproduce liquid-diamond α footprint bug → rust-crate-test/bugfix-liquid/
-use gemini_sparkle_remove::video::{ffmpeg_available, remove_video, VideoRemoveOptions};
+use gemini_unmark::video::{ffmpeg_available, remove_video, VideoRemoveOptions};
 use std::fs;
 use std::path::PathBuf;
 use std::time::Instant;

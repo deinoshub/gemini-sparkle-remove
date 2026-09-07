@@ -1,6 +1,6 @@
 //! Remove Gemini visible sparkle watermarks from RGBA buffers.
 //!
-//! Crate name: `gemini-sparkle-remove` (import as `gemini_sparkle_remove`).
+//! Crate name: `gemini-unmark` (import as `gemini_unmark`).
 //! Pure Rust; optional `video` / `video-fdncnn` features need ffmpeg tools
 //! (build-downloaded or PATH) and a per-target cmake-built libncnn — never Python.
 

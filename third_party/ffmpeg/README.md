@@ -18,5 +18,5 @@ Current bundle id: **`btbn-master-2026-09`**.
 Binaries are **gitignored** (multi-100MB).
 
 - Default: `cargo build --features video` downloads tools.
-- Opt out: `cargo build --features video,system-ffmpeg` (PATH / `GSR_FFMPEG`/`GSR_FFPROBE` only).
-- Env override: `GSR_SKIP_FFMPEG_DOWNLOAD=1` skips download (still uses cache if already present).
+- Opt out: `cargo build --features video,system-ffmpeg` (PATH / `GUM_FFMPEG`/`GUM_FFPROBE` only).
+- Env override: `GUM_SKIP_FFMPEG_DOWNLOAD=1` skips download (still uses cache if already present).

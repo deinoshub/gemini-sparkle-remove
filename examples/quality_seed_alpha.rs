@@ -1,5 +1,5 @@
 //! quality-seed-alpha: under-lock seed lift vs 69a4fd7 baseline / GWT
-use gemini_sparkle_remove::video::{ffmpeg_available, remove_video, VideoRemoveOptions};
+use gemini_unmark::video::{ffmpeg_available, remove_video, VideoRemoveOptions};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Instant;

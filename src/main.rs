@@ -2,13 +2,13 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use clap::{Parser, ValueEnum};
-use gemini_sparkle_remove::cli::{classify_input, InputKind};
-use gemini_sparkle_remove::video::{remove_video, MarkKind, VideoRemoveOptions};
-use gemini_sparkle_remove::{remove_gemini_sparkle, RemoveResult, RgbaImage};
+use gemini_unmark::cli::{classify_input, InputKind};
+use gemini_unmark::video::{remove_video, MarkKind, VideoRemoveOptions};
+use gemini_unmark::{remove_gemini_sparkle, RemoveResult, RgbaImage};
 
 #[derive(Parser, Debug)]
 #[command(
-    name = "gemini-sparkle-remove",
+    name = "gunmark",
     about = "Remove Gemini visible sparkle watermarks from images and videos"
 )]
 struct Args {
