@@ -44,7 +44,7 @@ jobs:
       - name: Test (default features)
         run: cargo test
       - name: Test video + FDnCNN
-        run: cargo test --features video-fdncnn,system-ffmpeg
+        run: cargo test --features video-fdncnn,system-ffmpeg --lib --tests
       - name: Package crate
         run: cargo package
       - name: Checksums

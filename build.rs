@@ -136,13 +136,22 @@ fn link_ncnn_prebuilt(pre: &NcnnPrebuilt, target: &str) {
     } else {
         println!("cargo:rustc-link-search=native={}", pre.search.display());
         println!("cargo:rustc-link-lib=static=ncnn");
+        // Official zips are Vulkan-enabled; gpu.cpp needs the bundled glslang.
+        for name in [
+            "glslang",
+            "MachineIndependent",
+            "GenericCodeGen",
+            "OSDependent",
+            "SPIRV",
+            "glslang-default-resource-limits",
+        ] {
+            println!("cargo:rustc-link-lib=static={name}");
+        }
         if target.contains("windows") {
-            // Official VS builds use MSVC OpenMP.
             if !target.contains("gnu") {
                 println!("cargo:rustc-link-lib=dylib=vcomp");
             }
         } else {
-            // Official Ubuntu zip is built with OpenMP + dlopen.
             println!("cargo:rustc-link-lib=gomp");
             println!("cargo:rustc-link-lib=pthread");
             println!("cargo:rustc-link-lib=dylib=stdc++");

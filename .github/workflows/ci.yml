@@ -59,7 +59,7 @@ jobs:
         if: runner.os == 'Windows'
         run: choco install ffmpeg -y --no-progress
       - name: Test video + FDnCNN (system ffmpeg, official ncnn zip)
-        run: cargo test --features video-fdncnn,system-ffmpeg
+        run: cargo test --features video-fdncnn,system-ffmpeg --lib --tests
       - name: Release-build CLI
         run: cargo build --release --features cli --bin gunmark
       - name: Release-build examples
