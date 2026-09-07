@@ -1,8 +1,9 @@
 /target
 .DS_Store
 .superpowers/
-# ncnn source + per-target cmake build (never commit)
+# ncnn source / cmake fallback and official prebuilt zips (never commit)
 third_party/ncnn-src/
+third_party/ncnn-prebuilt/
 third_party/ncnn/**
 !third_party/ncnn/README.md
 !third_party/ncnn/shim/

@@ -15,6 +15,8 @@ exclude = [
     "third_party/ffmpeg/**",
     "third_party/ncnn-src",
     "third_party/ncnn-src/**",
+    "third_party/ncnn-prebuilt",
+    "third_party/ncnn-prebuilt/**",
 ]
 
 [features]
@@ -23,20 +25,20 @@ video = ["dep:tempfile", "dep:image", "dep:rayon"]
 # Skip build-time ffmpeg/ffprobe download; runtime uses GUM_FFMPEG/GUM_FFPROBE
 # then PATH only. Combine with `video` or `video-fdncnn`.
 system-ffmpeg = []
-# FDnCNN (NcnnDenoiser) ROI postpass after reverse-blend. Requires `video` and
-# a per-target static libncnn (cmake-built from third_party/ncnn-src).
+# FDnCNN (NcnnDenoiser) ROI postpass after reverse-blend. Requires `video`.
+# Downloads the official Tencent/ncnn static zip for TARGET (cmake fallback).
 video-fdncnn = ["video"]
 # CLI binary: video + FDnCNN + system ffmpeg (no bundled ffmpeg download).
 cli = ["video-fdncnn", "system-ffmpeg", "dep:clap"]
 
 [dependencies]
 tempfile = { version = "3", optional = true }
-image = { version = "0.25", optional = true }
+image = { version = "0.25", optional = true, default-features = false, features = ["jpeg", "png", "webp", "bmp", "tiff"] }
 rayon = { version = "1.10", optional = true }
 clap = { version = "4", features = ["derive"], optional = true }
 
 [dev-dependencies]
-image = "0.25"
+image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
 
 [[bin]]
 name = "gunmark"

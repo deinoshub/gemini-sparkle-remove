@@ -31,44 +31,34 @@ jobs:
   video:
     name: video (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 90
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
     env:
       GUM_SKIP_FFMPEG_DOWNLOAD: "1"
-      CMAKE_BUILD_PARALLEL_LEVEL: "2"
-      CARGO_BUILD_JOBS: "2"
-      JOBS: "2"
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - uses: actions/cache@v4
         with:
-          path: third_party/ncnn-src
-          key: ncnn-20260526-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('build.rs', 'scripts/build_ncnn_static.sh') }}
+          path: third_party/ncnn-prebuilt
+          key: ncnn-prebuilt-20260526-${{ runner.os }}-${{ runner.arch }}
       - name: Install Linux deps
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends ffmpeg g++ cmake
+          sudo apt-get install -y --no-install-recommends ffmpeg g++ libgomp1
           ffmpeg -version | head -n 1
-          cmake --version | head -n 1
       - name: Install macOS ffmpeg
         if: runner.os == 'macOS'
         run: brew install ffmpeg
       - name: Install Windows ffmpeg
         if: runner.os == 'Windows'
         run: choco install ffmpeg -y --no-progress
-      - name: Build static ncnn (live cmake log)
-        shell: bash
-        run: |
-          export TARGET="$(rustc --print host-tuple)"
-          echo "TARGET=$TARGET"
-          bash scripts/build_ncnn_static.sh
-      - name: Test video + FDnCNN (system ffmpeg)
+      - name: Test video + FDnCNN (system ffmpeg, official ncnn zip)
         run: cargo test --features video-fdncnn,system-ffmpeg
       - name: Release-build CLI
         run: cargo build --release --features cli --bin gunmark

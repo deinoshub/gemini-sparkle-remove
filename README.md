@@ -17,7 +17,7 @@ Repository: [deinoshub/gemini-unmark](https://github.com/deinoshub/gemini-unmark
 | Default (still images) | Rust toolchain (`cargo`) |
 | Feature `video` | Rust + **ffmpeg** / **ffprobe** (downloaded at build time for common targets by default, or on `PATH`) |
 | Feature `video` + `system-ffmpeg` | Same APIs; **no** build-time download — uses `GUM_FFMPEG`/`GUM_FFPROBE` then `PATH` only |
-| Feature `video-fdncnn` | Above + CMake + C++ compiler + git (first clone). `build.rs` cmake-builds Tencent/ncnn **per TARGET** (OpenMP off). Tag **`20260526`**. |
+| Feature `video-fdncnn` | Above + C++ compiler. Downloads official Tencent/ncnn zip for TARGET (tag **`20260526`**). CMake only as fallback. |
 | Feature `cli` | `video-fdncnn` + `system-ffmpeg` + `clap`. Binary: `gunmark`. |
 
 No `python3`, OpenCV, or system ncnn Python bindings.
@@ -122,7 +122,7 @@ Build/test:
 cargo test
 cargo test --features video
 cargo test --features video,system-ffmpeg
-cargo test --features video-fdncnn,system-ffmpeg   # cmake-builds ncnn
+cargo test --features video-fdncnn,system-ffmpeg   # downloads official ncnn zip
 cargo test --features cli
 ```
 
@@ -133,9 +133,9 @@ GitHub Actions (`.github/workflows/ci.yml`) on `main` and pull requests:
 | Job | Runner | What it runs |
 |-----|--------|----------------|
 | `test` | Linux, macOS, Windows | `cargo test` (default features) |
-| `video` | Linux, macOS, Windows | cmake-build ncnn, `cargo test --features video-fdncnn,system-ffmpeg`, release-build CLI |
+| `video` | Linux, macOS, Windows | download official ncnn zip, `cargo test --features video-fdncnn,system-ffmpeg`, release-build CLI |
 
-The video job installs **system** `ffmpeg` / `ffprobe` and CMake, and enables `system-ffmpeg` (no bundled ffmpeg download). FDnCNN cmake-builds ncnn for that runner.
+The video job installs **system** `ffmpeg` / **ffprobe** and enables `system-ffmpeg` (no bundled ffmpeg download). FDnCNN uses the official ncnn release zip for that OS.
 
 To cut a GitHub Release, push a tag matching `Cargo.toml` `version`:
 

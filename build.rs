@@ -4,8 +4,8 @@
 //! - feature `system-ffmpeg` (with `video`): skip download; runtime uses
 //!   `GUM_FFMPEG`/`GUM_FFPROBE` then PATH only. Env `GUM_SKIP_FFMPEG_DOWNLOAD=1`
 //!   is an extra override that also skips download.
-//! - feature `video-fdncnn`: cmake-build static CPU ncnn for TARGET and link
-//!   the C++ Option shim. No libgomp.
+//! - feature `video-fdncnn`: download official Tencent/ncnn static zip for
+//!   TARGET (cmake-from-source fallback) and link the C++ Option shim.
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -34,15 +34,12 @@ fn setup_ncnn() {
     println!("cargo:rerun-if-env-changed=NCNN_SRC");
     println!("cargo:rerun-if-env-changed=NCNN_REV");
     println!("cargo:rerun-if-env-changed=CMAKE");
+    println!("cargo:rerun-if-env-changed=GUM_NCNN_FROM_SOURCE");
 
     let manifest = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
     let target = env::var("TARGET").unwrap_or_else(|_| env::var("HOST").unwrap());
     let spec = ncnn_link_spec(&target);
     let ncnn = manifest.join("third_party/ncnn");
-    let src = env::var("NCNN_SRC")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| manifest.join("third_party/ncnn-src"));
-    let build_dir = src.join(format!("build-{target}"));
 
     println!(
         "cargo:rerun-if-changed={}",
@@ -53,9 +50,22 @@ fn setup_ncnn() {
         ncnn.join("shim/gwr_ncnn_opt.h").display()
     );
 
-    let lib_path = find_ncnn_lib(&build_dir, spec.lib_filename).unwrap_or_else(|| {
+    let from_source = env::var("GUM_NCNN_FROM_SOURCE").ok().as_deref() == Some("1");
+    if !from_source {
+        if let Some(pre) = ensure_ncnn_prebuilt(&manifest, &target) {
+            compile_ncnn_shim(&ncnn, &[&pre.include]);
+            link_ncnn_prebuilt(&pre, &target);
+            return;
+        }
+    }
+
+    let src = env::var("NCNN_SRC")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| manifest.join("third_party/ncnn-src"));
+    let build_dir = src.join(format!("build-{target}"));
+    let lib_path = find_named_under(&build_dir, spec.lib_filename).unwrap_or_else(|| {
         ensure_ncnn_built(&src, &build_dir);
-        find_ncnn_lib(&build_dir, spec.lib_filename).unwrap_or_else(|| {
+        find_named_under(&build_dir, spec.lib_filename).unwrap_or_else(|| {
             panic!(
                 "ncnn static lib {} not found under {} after cmake build",
                 spec.lib_filename,
@@ -68,7 +78,6 @@ fn setup_ncnn() {
     let include_gen = lib_path
         .parent()
         .map(|p| {
-            // MSVC: .../src/Release/ncnn.lib → generated headers in .../src
             if p.file_name().and_then(|s| s.to_str()) == Some("Release")
                 || p.file_name().and_then(|s| s.to_str()) == Some("Debug")
             {
@@ -79,45 +88,193 @@ fn setup_ncnn() {
         })
         .unwrap_or_else(|| build_dir.join("src"));
 
-    cc::Build::new()
-        .cpp(true)
-        .file(ncnn.join("shim/gwr_ncnn_opt.cpp"))
-        .include(&include_src)
-        .include(&include_gen)
-        .include(ncnn.join("shim"))
-        .flag_if_supported("-std=c++11")
-        .flag_if_supported("-Wno-unused-parameter")
-        .compile("gwr_ncnn_opt");
-
+    compile_ncnn_shim(&ncnn, &[&include_src, &include_gen]);
     let lib_dir = lib_path.parent().expect("ncnn lib parent");
     println!("cargo:rustc-link-search=native={}", lib_dir.display());
     println!("cargo:rustc-link-lib=static=ncnn");
     for extra in spec.extra_libs {
-        if extra.kind.is_empty() {
-            println!("cargo:rustc-link-lib={}", extra.name);
-        } else {
-            println!("cargo:rustc-link-lib={}={}", extra.kind, extra.name);
-        }
+        emit_link_lib(extra.kind, extra.name);
     }
     println!("cargo:rerun-if-changed={}", lib_path.display());
 }
 
-fn find_ncnn_lib(root: &Path, filename: &str) -> Option<PathBuf> {
+struct NcnnPrebuilt {
+    include: PathBuf,
+    /// Directory to pass as `-L` (native) or framework search path.
+    search: PathBuf,
+    framework: bool,
+}
+
+fn compile_ncnn_shim(ncnn: &Path, includes: &[&Path]) {
+    let mut build = cc::Build::new();
+    build
+        .cpp(true)
+        .file(ncnn.join("shim/gwr_ncnn_opt.cpp"))
+        .include(ncnn.join("shim"))
+        .flag_if_supported("-std=c++11")
+        .flag_if_supported("-Wno-unused-parameter");
+    for include in includes {
+        build.include(include);
+    }
+    build.compile("gwr_ncnn_opt");
+}
+
+fn emit_link_lib(kind: &str, name: &str) {
+    if kind.is_empty() {
+        println!("cargo:rustc-link-lib={name}");
+    } else {
+        println!("cargo:rustc-link-lib={kind}={name}");
+    }
+}
+
+fn link_ncnn_prebuilt(pre: &NcnnPrebuilt, target: &str) {
+    if pre.framework {
+        println!("cargo:rustc-link-search=framework={}", pre.search.display());
+        println!("cargo:rustc-link-lib=framework=ncnn");
+        println!("cargo:rustc-link-lib=framework=openmp");
+        println!("cargo:rustc-link-lib=dylib=c++");
+    } else {
+        println!("cargo:rustc-link-search=native={}", pre.search.display());
+        println!("cargo:rustc-link-lib=static=ncnn");
+        if target.contains("windows") {
+            // Official VS builds use MSVC OpenMP.
+            if !target.contains("gnu") {
+                println!("cargo:rustc-link-lib=dylib=vcomp");
+            }
+        } else {
+            // Official Ubuntu zip is built with OpenMP + dlopen.
+            println!("cargo:rustc-link-lib=gomp");
+            println!("cargo:rustc-link-lib=pthread");
+            println!("cargo:rustc-link-lib=dylib=stdc++");
+            println!("cargo:rustc-link-lib=dylib=dl");
+        }
+    }
+}
+
+fn ncnn_prebuilt_asset(target: &str, rev: &str) -> Option<String> {
+    if target == "x86_64-unknown-linux-gnu" {
+        Some(format!("ncnn-{rev}-ubuntu-2404.zip"))
+    } else if target.contains("apple-darwin") {
+        Some(format!("ncnn-{rev}-macos.zip"))
+    } else if target == "x86_64-pc-windows-msvc" || target == "aarch64-pc-windows-msvc" {
+        Some(format!("ncnn-{rev}-windows-vs2022.zip"))
+    } else {
+        None
+    }
+}
+
+fn ensure_ncnn_prebuilt(manifest: &Path, target: &str) -> Option<NcnnPrebuilt> {
+    let rev = env::var("NCNN_REV").unwrap_or_else(|_| NCNN_REV.to_string());
+    let asset = ncnn_prebuilt_asset(target, &rev)?;
+    let dest = manifest
+        .join("third_party/ncnn-prebuilt")
+        .join(&rev)
+        .join(target);
+    if locate_prebuilt(&dest, target).is_none() {
+        if let Err(e) = download_ncnn_prebuilt(&dest, &rev, &asset) {
+            println!("cargo:warning=ncnn prebuilt download failed ({e}); falling back to cmake");
+            return None;
+        }
+    }
+    locate_prebuilt(&dest, target)
+}
+
+fn download_ncnn_prebuilt(dest: &Path, rev: &str, asset: &str) -> Result<(), String> {
+    fs::create_dir_all(dest).map_err(|e| format!("mkdir {}: {e}", dest.display()))?;
+    let url = format!("https://github.com/Tencent/ncnn/releases/download/{rev}/{asset}");
+    let zip = dest.join("_dl.zip");
+    println!("cargo:warning=downloading official ncnn {asset}…");
+    download_url(&url, &zip)?;
+    let dest_s = dest.to_str().unwrap();
+    let zip_s = zip.to_str().unwrap();
+    let unzipped = run_cmd("unzip", &["-o", "-q", zip_s, "-d", dest_s]).or_else(|_| {
+        let cmd = format!(
+            "Expand-Archive -Force '{}' '{}'",
+            zip.display(),
+            dest.display()
+        );
+        run_cmd("powershell", &["-NoProfile", "-Command", &cmd])
+    });
+    unzipped?;
+    let _ = fs::remove_file(&zip);
+    Ok(())
+}
+
+fn locate_prebuilt(root: &Path, target: &str) -> Option<NcnnPrebuilt> {
     if !root.exists() {
         return None;
     }
-    let alt = if filename == "ncnn.lib" {
-        "libncnn.a"
+    if target.contains("apple") {
+        let fw = find_dir_named(root, "ncnn.framework")?;
+        let include = find_named_under(&fw, "c_api.h")?.parent()?.to_path_buf();
+        let search = fw.parent()?.to_path_buf();
+        return Some(NcnnPrebuilt {
+            include,
+            search,
+            framework: true,
+        });
+    }
+    let search_root = if target.contains("windows") {
+        let arch = if target.starts_with("aarch64") {
+            "arm64"
+        } else {
+            "x64"
+        };
+        find_dir_named(root, arch).unwrap_or_else(|| root.to_path_buf())
     } else {
-        "ncnn.lib"
+        root.to_path_buf()
     };
+    let include = find_named_under(&search_root, "c_api.h")?
+        .parent()?
+        .to_path_buf();
+    let lib_name = if target.contains("windows") {
+        "ncnn.lib"
+    } else {
+        "libncnn.a"
+    };
+    let lib = find_named_under(&search_root, lib_name)?;
+    Some(NcnnPrebuilt {
+        include,
+        search: lib.parent()?.to_path_buf(),
+        framework: false,
+    })
+}
+
+fn find_dir_named(root: &Path, name: &str) -> Option<PathBuf> {
+    let mut stack = vec![root.to_path_buf()];
+    let mut n = 0usize;
+    while let Some(dir) = stack.pop() {
+        n += 1;
+        if n > 256 {
+            break;
+        }
+        let Ok(entries) = fs::read_dir(&dir) else {
+            continue;
+        };
+        for ent in entries.flatten() {
+            let p = ent.path();
+            if p.is_dir() {
+                if p.file_name().and_then(|s| s.to_str()) == Some(name) {
+                    return Some(p);
+                }
+                stack.push(p);
+            }
+        }
+    }
+    None
+}
+
+fn find_named_under(root: &Path, filename: &str) -> Option<PathBuf> {
+    if !root.exists() {
+        return None;
+    }
     let mut stack = vec![root.to_path_buf()];
     let mut depth = 0usize;
     while let Some(dir) = stack.pop() {
-        if depth > 64 {
+        depth += 1;
+        if depth > 256 {
             break;
         }
-        depth += 1;
         let Ok(entries) = fs::read_dir(&dir) else {
             continue;
         };
@@ -127,8 +284,7 @@ fn find_ncnn_lib(root: &Path, filename: &str) -> Option<PathBuf> {
                 stack.push(p);
                 continue;
             }
-            let name = p.file_name().and_then(|s| s.to_str()).unwrap_or("");
-            if name == filename || name == alt {
+            if p.file_name().and_then(|s| s.to_str()) == Some(filename) {
                 return Some(p);
             }
         }
