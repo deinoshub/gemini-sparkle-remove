@@ -1,0 +1,63 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+  GSR_SKIP_FFMPEG_DOWNLOAD: "1"
+
+jobs:
+  release:
+    name: package and GitHub Release
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install system ffmpeg and C++ link deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ffmpeg g++ libgomp1
+      - name: Check tag matches Cargo.toml version
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME}"
+          expect="${tag#v}"
+          got="$(sed -n 's/^version = "\([^"]*\)"/\1/p' Cargo.toml | head -n1)"
+          if [ "$got" != "$expect" ]; then
+            echo "Cargo.toml version '$got' does not match tag '$tag'" >&2
+            exit 1
+          fi
+          echo "version $got matches $tag"
+          echo "VERSION=$got" >> "$GITHUB_ENV"
+      - name: Test (default features)
+        run: cargo test
+      - name: Test all video features (no bundled ffmpeg download)
+        run: cargo test --all-features
+      - name: Release-build library and examples
+        run: cargo build --release --examples --all-features
+      - name: Package crate
+        run: cargo package
+      - name: Checksums
+        run: |
+          set -euo pipefail
+          crate="target/package/gemini-sparkle-remove-${VERSION}.crate"
+          sha256sum "$crate" | tee SHA256SUMS.txt
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          crate="target/package/gemini-sparkle-remove-${VERSION}.crate"
+          gh release create "$GITHUB_REF_NAME" \
+            --title "$GITHUB_REF_NAME" \
+            --generate-notes \
+            "$crate" \
+            SHA256SUMS.txt

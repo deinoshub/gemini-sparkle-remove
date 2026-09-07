@@ -1,5 +1,7 @@
 # gemini-sparkle-remove
 
+[![CI](https://github.com/deinoshub/gemini-sparkle-remove/actions/workflows/ci.yml/badge.svg)](https://github.com/deinoshub/gemini-sparkle-remove/actions/workflows/ci.yml)
+
 Rust library that removes Gemini visible sparkle watermarks from RGBA buffers via reverse alpha-blend.
 
 Pure Rust runtime (no Python). MIT licensed.
@@ -108,6 +110,26 @@ cargo test --features video
 cargo test --features video,system-ffmpeg
 cargo test --features video-fdncnn   # needs third_party/ncnn
 ```
+
+## CI and releases
+
+GitHub Actions (`.github/workflows/ci.yml`) on `main` and pull requests:
+
+| Job | Runner | What it runs |
+|-----|--------|----------------|
+| `test` | Linux, macOS, Windows | `cargo test` (default features) |
+| `video` | Linux | `cargo test --all-features` and `cargo build --release --examples --all-features` |
+
+The video job installs **system** `ffmpeg` / `ffprobe` and enables `system-ffmpeg`, so build-time ffmpeg download is skipped. `video-fdncnn` uses the bundled `third_party/ncnn` static lib (ELF x86_64; Linux CI only).
+
+To cut a GitHub Release, push a tag matching `Cargo.toml` `version`:
+
+```bash
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+`.github/workflows/release.yml` re-runs default + all-features tests, `cargo package`s the crate (no crates.io publish), and attaches the `.crate` plus `SHA256SUMS.txt`.
 
 ## License
 
