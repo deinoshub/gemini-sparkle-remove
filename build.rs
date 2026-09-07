@@ -530,13 +530,18 @@ fn find_named_file(root: &Path, name: &str) -> Option<PathBuf> {
 }
 
 fn run_cmd(bin: &str, args: &[&str]) -> Result<(), String> {
-    let status = Command::new(bin)
+    let output = Command::new(bin)
         .args(args)
-        .status()
+        .output()
         .map_err(|e| format!("spawn {bin}: {e}"))?;
-    if status.success() {
+    if output.status.success() {
         Ok(())
     } else {
-        Err(format!("{bin} {:?} failed: {status}", args))
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        Err(format!(
+            "{bin} {:?} failed: {}\nstdout:\n{stdout}\nstderr:\n{stderr}",
+            args, output.status
+        ))
     }
 }
