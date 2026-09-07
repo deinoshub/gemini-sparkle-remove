@@ -1,0 +1,103 @@
+[package]
+name = "gemini-sparkle-remove"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Remove Gemini visible sparkle watermarks via reverse alpha-blend (pure Rust)"
+repository = "https://github.com/deinoshub/gemini-sparkle-remove"
+readme = "README.md"
+exclude = [
+    "docs/superpowers",
+    "docs/superpowers/**",
+    ".superpowers",
+    ".superpowers/**",
+    "third_party/ffmpeg",
+    "third_party/ffmpeg/**",
+    "third_party/ncnn-src",
+    "third_party/ncnn-src/**",
+]
+
+[features]
+default = []
+video = ["dep:tempfile", "dep:image", "dep:rayon"]
+# Skip build-time ffmpeg/ffprobe download; runtime uses GSR_FFMPEG/GSR_FFPROBE
+# then PATH only. Combine with `video` or `video-fdncnn`.
+system-ffmpeg = []
+# FDnCNN (NcnnDenoiser) ROI postpass after reverse-blend. Requires `video` and
+# bundled static libncnn under third_party/ncnn/. Pure Rust / in-process only.
+video-fdncnn = ["video"]
+
+[dependencies]
+tempfile = { version = "3", optional = true }
+image = { version = "0.25", optional = true }
+rayon = { version = "1.10", optional = true }
+
+[dev-dependencies]
+image = "0.25"
+
+[[example]]
+name = "remove_sample_video"
+required-features = ["video"]
+
+[[example]]
+name = "process_new2"
+required-features = ["video"]
+
+[[example]]
+name = "process_fdncnn"
+required-features = ["video-fdncnn"]
+
+[[example]]
+name = "bench_time"
+required-features = ["video"]
+
+[build-dependencies]
+cc = "1"
+
+[[example]]
+name = "batch_all_fdncnn"
+required-features = ["video-fdncnn"]
+
+[[example]]
+name = "quality_v3"
+required-features = ["video-fdncnn"]
+
+[[example]]
+name = "bugfix_roi"
+required-features = ["video-fdncnn"]
+
+[[example]]
+name = "bugfix_liquid"
+required-features = ["video-fdncnn"]
+
+[[example]]
+name = "quality_flicker"
+required-features = ["video-fdncnn"]
+
+[[example]]
+name = "quality_close_gwt"
+required-features = ["video-fdncnn"]
+
+[[example]]
+name = "quality_fdncnn_parity"
+required-features = ["video-fdncnn"]
+
+[[example]]
+name = "quality_batch_eval"
+required-features = ["video-fdncnn"]
+
+[[example]]
+name = "quality_deep_parity"
+required-features = ["video-fdncnn"]
+
+[[example]]
+name = "quality_seed_alpha"
+required-features = ["video-fdncnn"]
+
+[[example]]
+name = "probe_force_alpha"
+required-features = ["video"]
+
+[[example]]
+name = "batch_prior_media"
+required-features = ["video"]

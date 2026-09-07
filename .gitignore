@@ -1,0 +1,7 @@
+/target
+.DS_Store
+.superpowers/
+third_party/ncnn-src/
+# Build-time static ffmpeg/ffprobe cache (multi-100MB; never commit)
+third_party/ffmpeg/**
+!third_party/ffmpeg/README.md
