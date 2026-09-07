@@ -140,8 +140,8 @@ The video job installs **system** `ffmpeg` / **ffprobe** and enables `system-ffm
 To cut a GitHub Release, push a tag matching `Cargo.toml` `version`:
 
 ```bash
-git tag v0.1.0
-git push origin v0.1.0
+git tag v0.2.0
+git push origin v0.2.0
 ```
 
 `.github/workflows/release.yml` packages the crate and attaches Linux/macOS/Windows CLI binaries plus `SHA256SUMS.txt` (no crates.io publish).
