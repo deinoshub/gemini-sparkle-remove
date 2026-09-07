@@ -10,12 +10,10 @@ BUILD="${SRC}/build-${TARGET}"
 
 if [[ -n "${JOBS:-}" ]]; then
   :
-elif command -v nproc >/dev/null 2>&1; then
-  JOBS="$(nproc)"
-elif command -v sysctl >/dev/null 2>&1; then
-  JOBS="$(sysctl -n hw.ncpu)"
 else
-  JOBS="${NUMBER_OF_PROCESSORS:-4}"
+  # Cap at 2 by default — unlimited -j OOMs 7GB GitHub Ubuntu runners
+  # when cargo is also compiling rav1e in the same job.
+  JOBS=2
 fi
 
 if [[ ! -f "$SRC/CMakeLists.txt" ]]; then

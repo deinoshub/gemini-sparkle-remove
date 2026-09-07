@@ -38,6 +38,9 @@ jobs:
         os: [ubuntu-latest, macos-latest, windows-latest]
     env:
       GSR_SKIP_FFMPEG_DOWNLOAD: "1"
+      CMAKE_BUILD_PARALLEL_LEVEL: "2"
+      CARGO_BUILD_JOBS: "2"
+      JOBS: "2"
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -59,10 +62,16 @@ jobs:
       - name: Install Windows ffmpeg
         if: runner.os == 'Windows'
         run: choco install ffmpeg -y --no-progress
-      - name: Test all features (system ffmpeg, per-target ncnn)
-        run: cargo test --all-features
+      - name: Build static ncnn (live cmake log)
+        shell: bash
+        run: |
+          export TARGET="$(rustc --print host-tuple)"
+          echo "TARGET=$TARGET"
+          bash scripts/build_ncnn_static.sh
+      - name: Test video + FDnCNN (system ffmpeg)
+        run: cargo test --features video-fdncnn,system-ffmpeg
       - name: Release-build CLI
         run: cargo build --release --features cli --bin gemini-sparkle-remove
       - name: Release-build examples
         if: runner.os == 'Linux'
-        run: cargo build --release --examples --all-features
+        run: cargo build --release --examples --features video-fdncnn,system-ffmpeg

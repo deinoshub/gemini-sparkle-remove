@@ -133,7 +133,7 @@ GitHub Actions (`.github/workflows/ci.yml`) on `main` and pull requests:
 | Job | Runner | What it runs |
 |-----|--------|----------------|
 | `test` | Linux, macOS, Windows | `cargo test` (default features) |
-| `video` | Linux, macOS, Windows | `cargo test --all-features`, release-build CLI; examples on Linux |
+| `video` | Linux, macOS, Windows | cmake-build ncnn, `cargo test --features video-fdncnn,system-ffmpeg`, release-build CLI |
 
 The video job installs **system** `ffmpeg` / `ffprobe` and CMake, and enables `system-ffmpeg` (no bundled ffmpeg download). FDnCNN cmake-builds ncnn for that runner.
 

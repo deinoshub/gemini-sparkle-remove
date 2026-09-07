@@ -161,6 +161,7 @@ fn ensure_ncnn_built(src: &Path, build_dir: &Path) {
         ],
     )
     .unwrap_or_else(|e| panic!("cmake configure ncnn: {e}"));
+    let jobs = env::var("CMAKE_BUILD_PARALLEL_LEVEL").unwrap_or_else(|_| "2".to_string());
     run_cmd(
         cmake.to_str().unwrap(),
         &[
@@ -169,6 +170,7 @@ fn ensure_ncnn_built(src: &Path, build_dir: &Path) {
             "--config",
             "Release",
             "--parallel",
+            &jobs,
         ],
     )
     .unwrap_or_else(|e| panic!("cmake build ncnn: {e}"));
@@ -530,18 +532,15 @@ fn find_named_file(root: &Path, name: &str) -> Option<PathBuf> {
 }
 
 fn run_cmd(bin: &str, args: &[&str]) -> Result<(), String> {
-    let output = Command::new(bin)
+    // Inherit stdio so cmake progress shows in CI; do not buffer the full log
+    // (that OOMs Ubuntu runners when ncnn compiles in parallel with rav1e).
+    let status = Command::new(bin)
         .args(args)
-        .output()
+        .status()
         .map_err(|e| format!("spawn {bin}: {e}"))?;
-    if output.status.success() {
+    if status.success() {
         Ok(())
     } else {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        Err(format!(
-            "{bin} {:?} failed: {}\nstdout:\n{stdout}\nstderr:\n{stderr}",
-            args, output.status
-        ))
+        Err(format!("{bin} {:?} failed: {status}", args))
     }
 }

@@ -11,6 +11,9 @@ permissions:
 env:
   CARGO_TERM_COLOR: always
   GSR_SKIP_FFMPEG_DOWNLOAD: "1"
+  CMAKE_BUILD_PARALLEL_LEVEL: "2"
+  CARGO_BUILD_JOBS: "2"
+  JOBS: "2"
 
 jobs:
   crate:
@@ -41,10 +44,16 @@ jobs:
           fi
           echo "version $got matches $tag"
           echo "VERSION=$got" >> "$GITHUB_ENV"
+      - name: Build static ncnn (live cmake log)
+        shell: bash
+        run: |
+          export TARGET="$(rustc --print host-tuple)"
+          echo "TARGET=$TARGET"
+          bash scripts/build_ncnn_static.sh
       - name: Test (default features)
         run: cargo test
-      - name: Test all features
-        run: cargo test --all-features
+      - name: Test video + FDnCNN
+        run: cargo test --features video-fdncnn,system-ffmpeg
       - name: Package crate
         run: cargo package
       - name: Checksums
@@ -92,6 +101,12 @@ jobs:
       - name: Install Windows ffmpeg
         if: runner.os == 'Windows'
         run: choco install ffmpeg -y --no-progress
+      - name: Build static ncnn (live cmake log)
+        shell: bash
+        run: |
+          export TARGET="$(rustc --print host-tuple)"
+          echo "TARGET=$TARGET"
+          bash scripts/build_ncnn_static.sh
       - name: Build CLI
         run: cargo build --release --features cli --bin gemini-sparkle-remove
       - name: Stage binary
