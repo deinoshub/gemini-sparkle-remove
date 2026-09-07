@@ -24,16 +24,24 @@ video = ["dep:tempfile", "dep:image", "dep:rayon"]
 # then PATH only. Combine with `video` or `video-fdncnn`.
 system-ffmpeg = []
 # FDnCNN (NcnnDenoiser) ROI postpass after reverse-blend. Requires `video` and
-# bundled static libncnn under third_party/ncnn/. Pure Rust / in-process only.
+# a per-target static libncnn (cmake-built from third_party/ncnn-src).
 video-fdncnn = ["video"]
+# CLI binary: video + FDnCNN + system ffmpeg (no bundled ffmpeg download).
+cli = ["video-fdncnn", "system-ffmpeg", "dep:clap"]
 
 [dependencies]
 tempfile = { version = "3", optional = true }
 image = { version = "0.25", optional = true }
 rayon = { version = "1.10", optional = true }
+clap = { version = "4", features = ["derive"], optional = true }
 
 [dev-dependencies]
 image = "0.25"
+
+[[bin]]
+name = "gemini-sparkle-remove"
+path = "src/main.rs"
+required-features = ["cli"]
 
 [[example]]
 name = "remove_sample_video"

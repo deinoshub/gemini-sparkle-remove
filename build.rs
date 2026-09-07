@@ -4,15 +4,21 @@
 //! - feature `system-ffmpeg` (with `video`): skip download; runtime uses
 //!   `GSR_FFMPEG`/`GSR_FFPROBE` then PATH only. Env `GSR_SKIP_FFMPEG_DOWNLOAD=1`
 //!   is an extra override that also skips download.
-//! - feature `video-fdncnn`: link bundled static libncnn + C++ Option shim.
+//! - feature `video-fdncnn`: cmake-build static CPU ncnn for TARGET and link
+//!   the C++ Option shim. No libgomp.
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+include!("src/native_link.rs");
+
 /// Cache key / documented bundle id (BtbN master “latest” GPL assets, or
 /// evermeet/osxexperts pins for macOS). Update COMMIT.txt + README when bumping.
 const FFMPEG_BUNDLE_VERSION: &str = "btbn-master-2026-09";
+
+/// Pinned Tencent/ncnn release tag. Override with env `NCNN_REV`.
+const NCNN_REV: &str = "20260526";
 
 fn main() {
     if env::var("CARGO_FEATURE_VIDEO").is_ok() {
@@ -25,20 +31,19 @@ fn main() {
 }
 
 fn setup_ncnn() {
-    let manifest = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
-    let ncnn = manifest.join("third_party/ncnn");
-    let lib = ncnn.join("lib/libncnn.a");
-    if !lib.is_file() {
-        panic!(
-            "missing {} — run scripts/build_ncnn_static.sh first",
-            lib.display()
-        );
-    }
+    println!("cargo:rerun-if-env-changed=NCNN_SRC");
+    println!("cargo:rerun-if-env-changed=NCNN_REV");
+    println!("cargo:rerun-if-env-changed=CMAKE");
 
-    println!(
-        "cargo:rerun-if-changed={}",
-        ncnn.join("lib/libncnn.a").display()
-    );
+    let manifest = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
+    let target = env::var("TARGET").unwrap_or_else(|_| env::var("HOST").unwrap());
+    let spec = ncnn_link_spec(&target);
+    let ncnn = manifest.join("third_party/ncnn");
+    let src = env::var("NCNN_SRC")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| manifest.join("third_party/ncnn-src"));
+    let build_dir = src.join(format!("build-{target}"));
+
     println!(
         "cargo:rerun-if-changed={}",
         ncnn.join("shim/gwr_ncnn_opt.cpp").display()
@@ -48,23 +53,179 @@ fn setup_ncnn() {
         ncnn.join("shim/gwr_ncnn_opt.h").display()
     );
 
+    let lib_path = find_ncnn_lib(&build_dir, spec.lib_filename).unwrap_or_else(|| {
+        ensure_ncnn_built(&src, &build_dir);
+        find_ncnn_lib(&build_dir, spec.lib_filename).unwrap_or_else(|| {
+            panic!(
+                "ncnn static lib {} not found under {} after cmake build",
+                spec.lib_filename,
+                build_dir.display()
+            )
+        })
+    });
+
+    let include_src = src.join("src");
+    let include_gen = lib_path
+        .parent()
+        .map(|p| {
+            // MSVC: .../src/Release/ncnn.lib → generated headers in .../src
+            if p.file_name().and_then(|s| s.to_str()) == Some("Release")
+                || p.file_name().and_then(|s| s.to_str()) == Some("Debug")
+            {
+                p.parent().unwrap_or(p).to_path_buf()
+            } else {
+                p.to_path_buf()
+            }
+        })
+        .unwrap_or_else(|| build_dir.join("src"));
+
     cc::Build::new()
         .cpp(true)
         .file(ncnn.join("shim/gwr_ncnn_opt.cpp"))
-        .include(ncnn.join("include"))
+        .include(&include_src)
+        .include(&include_gen)
         .include(ncnn.join("shim"))
         .flag_if_supported("-std=c++11")
         .flag_if_supported("-Wno-unused-parameter")
         .compile("gwr_ncnn_opt");
 
-    println!(
-        "cargo:rustc-link-search=native={}",
-        ncnn.join("lib").display()
-    );
+    let lib_dir = lib_path.parent().expect("ncnn lib parent");
+    println!("cargo:rustc-link-search=native={}", lib_dir.display());
     println!("cargo:rustc-link-lib=static=ncnn");
-    println!("cargo:rustc-link-lib=gomp");
-    println!("cargo:rustc-link-lib=pthread");
-    println!("cargo:rustc-link-lib=dylib=stdc++");
+    for extra in spec.extra_libs {
+        if extra.kind.is_empty() {
+            println!("cargo:rustc-link-lib={}", extra.name);
+        } else {
+            println!("cargo:rustc-link-lib={}={}", extra.kind, extra.name);
+        }
+    }
+    println!("cargo:rerun-if-changed={}", lib_path.display());
+}
+
+fn find_ncnn_lib(root: &Path, filename: &str) -> Option<PathBuf> {
+    if !root.exists() {
+        return None;
+    }
+    let alt = if filename == "ncnn.lib" {
+        "libncnn.a"
+    } else {
+        "ncnn.lib"
+    };
+    let mut stack = vec![root.to_path_buf()];
+    let mut depth = 0usize;
+    while let Some(dir) = stack.pop() {
+        if depth > 64 {
+            break;
+        }
+        depth += 1;
+        let Ok(entries) = fs::read_dir(&dir) else {
+            continue;
+        };
+        for ent in entries.flatten() {
+            let p = ent.path();
+            if p.is_dir() {
+                stack.push(p);
+                continue;
+            }
+            let name = p.file_name().and_then(|s| s.to_str()).unwrap_or("");
+            if name == filename || name == alt {
+                return Some(p);
+            }
+        }
+    }
+    None
+}
+
+fn ensure_ncnn_built(src: &Path, build_dir: &Path) {
+    ensure_ncnn_checkout(src);
+    let cmake = cmake_bin();
+    println!(
+        "cargo:warning=building static CPU ncnn ({}) in {}",
+        env::var("NCNN_REV").unwrap_or_else(|_| NCNN_REV.to_string()),
+        build_dir.display()
+    );
+    fs::create_dir_all(build_dir).unwrap_or_else(|e| panic!("mkdir {}: {e}", build_dir.display()));
+    run_cmd(
+        cmake.to_str().unwrap(),
+        &[
+            "-S",
+            src.to_str().unwrap(),
+            "-B",
+            build_dir.to_str().unwrap(),
+            "-DNCNN_BUILD_TOOLS=OFF",
+            "-DNCNN_BUILD_EXAMPLES=OFF",
+            "-DNCNN_VULKAN=OFF",
+            "-DNCNN_SHARED_LIB=OFF",
+            "-DNCNN_OPENMP=OFF",
+            "-DCMAKE_BUILD_TYPE=Release",
+        ],
+    )
+    .unwrap_or_else(|e| panic!("cmake configure ncnn: {e}"));
+    run_cmd(
+        cmake.to_str().unwrap(),
+        &[
+            "--build",
+            build_dir.to_str().unwrap(),
+            "--config",
+            "Release",
+            "--parallel",
+        ],
+    )
+    .unwrap_or_else(|e| panic!("cmake build ncnn: {e}"));
+}
+
+fn ensure_ncnn_checkout(src: &Path) {
+    if src.join("CMakeLists.txt").is_file() {
+        return;
+    }
+    let rev = env::var("NCNN_REV").unwrap_or_else(|_| NCNN_REV.to_string());
+    if let Some(parent) = src.parent() {
+        fs::create_dir_all(parent).unwrap_or_else(|e| panic!("mkdir {}: {e}", parent.display()));
+    }
+    let dest = src.to_str().unwrap();
+    println!("cargo:warning=cloning Tencent/ncnn {rev} → {dest}");
+    run_cmd(
+        "git",
+        &[
+            "clone",
+            "--depth",
+            "1",
+            "--branch",
+            &rev,
+            "https://github.com/Tencent/ncnn.git",
+            dest,
+        ],
+    )
+    .unwrap_or_else(|e| panic!("git clone ncnn: {e}"));
+}
+
+fn cmake_bin() -> PathBuf {
+    if let Ok(p) = env::var("CMAKE") {
+        return PathBuf::from(p);
+    }
+    for candidate in [
+        "cmake",
+        "/opt/homebrew/bin/cmake",
+        "/usr/local/bin/cmake",
+        "C:\\Program Files\\CMake\\bin\\cmake.exe",
+    ] {
+        let p = Path::new(candidate);
+        if candidate == "cmake" {
+            if Command::new("cmake")
+                .arg("--version")
+                .output()
+                .map(|o| o.status.success())
+                .unwrap_or(false)
+            {
+                return PathBuf::from("cmake");
+            }
+            continue;
+        }
+        if p.is_file() {
+            return p.to_path_buf();
+        }
+    }
+    panic!("cmake not found — install CMake or set CMAKE to its path");
 }
 
 fn setup_ffmpeg() {

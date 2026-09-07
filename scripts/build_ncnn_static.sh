@@ -1,19 +1,30 @@
 #!/usr/bin/env bash
-# Build static CPU libncnn into third_party/ncnn (persistent).
+# Build static CPU libncnn for the host (or $TARGET) via CMake.
+# cargo build --features video-fdncnn also does this from build.rs when missing.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 SRC="${NCNN_SRC:-$ROOT/third_party/ncnn-src}"
-OUT="$ROOT/third_party/ncnn"
-JOBS="$(nproc)"
-if [[ ! -d "$SRC/.git" ]]; then
-  git clone --depth 1 https://github.com/Tencent/ncnn.git "$SRC"
+REV="${NCNN_REV:-20260526}"
+TARGET="${TARGET:-$(rustc --print host-tuple 2>/dev/null || uname -m)}"
+BUILD="${SRC}/build-${TARGET}"
+
+if [[ -n "${JOBS:-}" ]]; then
+  :
+elif command -v nproc >/dev/null 2>&1; then
+  JOBS="$(nproc)"
+elif command -v sysctl >/dev/null 2>&1; then
+  JOBS="$(sysctl -n hw.ncpu)"
+else
+  JOBS="${NUMBER_OF_PROCESSORS:-4}"
 fi
-cmake -S "$SRC" -B "$SRC/build" \
+
+if [[ ! -f "$SRC/CMakeLists.txt" ]]; then
+  git clone --depth 1 --branch "$REV" https://github.com/Tencent/ncnn.git "$SRC"
+fi
+
+cmake -S "$SRC" -B "$BUILD" \
   -DNCNN_BUILD_TOOLS=OFF -DNCNN_BUILD_EXAMPLES=OFF \
-  -DNCNN_VULKAN=OFF -DNCNN_SHARED_LIB=OFF -DCMAKE_BUILD_TYPE=Release
-cmake --build "$SRC/build" -j"$JOBS"
-mkdir -p "$OUT/include" "$OUT/lib" "$OUT/shim"
-cp -a "$SRC"/src/*.h "$SRC"/src/*.hpp "$OUT/include/" 2>/dev/null || true
-cp -a "$SRC"/build/src/*.h "$OUT/include/" 2>/dev/null || true
-cp "$SRC/build/src/libncnn.a" "$OUT/lib/"
-echo "Installed libncnn.a → $OUT/lib"
+  -DNCNN_VULKAN=OFF -DNCNN_SHARED_LIB=OFF -DNCNN_OPENMP=OFF \
+  -DCMAKE_BUILD_TYPE=Release
+cmake --build "$BUILD" --config Release --parallel "$JOBS"
+echo "Built ncnn in $BUILD"

@@ -2,10 +2,12 @@
 //!
 //! Crate name: `gemini-sparkle-remove` (import as `gemini_sparkle_remove`).
 //! Pure Rust; optional `video` / `video-fdncnn` features need ffmpeg tools
-//! (build-downloaded or PATH) and bundled libncnn respectively — never Python.
+//! (build-downloaded or PATH) and a per-target cmake-built libncnn — never Python.
 
 pub mod blend;
+pub mod cli;
 pub mod detect;
+pub mod native_link;
 pub mod template;
 
 #[cfg(feature = "video")]

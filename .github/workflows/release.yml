@@ -13,18 +13,22 @@ env:
   GSR_SKIP_FFMPEG_DOWNLOAD: "1"
 
 jobs:
-  release:
-    name: package and GitHub Release
+  crate:
+    name: package crate
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - name: Install system ffmpeg and C++ link deps
+      - uses: actions/cache@v4
+        with:
+          path: third_party/ncnn-src
+          key: ncnn-20260526-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('build.rs', 'scripts/build_ncnn_static.sh') }}
+      - name: Install system ffmpeg and CMake
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends ffmpeg g++ libgomp1
+          sudo apt-get install -y --no-install-recommends ffmpeg g++ cmake
       - name: Check tag matches Cargo.toml version
         run: |
           set -euo pipefail
@@ -39,10 +43,8 @@ jobs:
           echo "VERSION=$got" >> "$GITHUB_ENV"
       - name: Test (default features)
         run: cargo test
-      - name: Test all video features (no bundled ffmpeg download)
+      - name: Test all features
         run: cargo test --all-features
-      - name: Release-build library and examples
-        run: cargo build --release --examples --all-features
       - name: Package crate
         run: cargo package
       - name: Checksums
@@ -50,14 +52,78 @@ jobs:
           set -euo pipefail
           crate="target/package/gemini-sparkle-remove-${VERSION}.crate"
           sha256sum "$crate" | tee SHA256SUMS.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: crate
+          path: |
+            target/package/gemini-sparkle-remove-*.crate
+            SHA256SUMS.txt
+
+  bin:
+    name: bin (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            artifact: gemini-sparkle-remove-linux-x86_64
+          - os: macos-latest
+            artifact: gemini-sparkle-remove-macos-aarch64
+          - os: windows-latest
+            artifact: gemini-sparkle-remove-windows-x86_64.exe
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/cache@v4
+        with:
+          path: third_party/ncnn-src
+          key: ncnn-20260526-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('build.rs', 'scripts/build_ncnn_static.sh') }}
+      - name: Install Linux deps
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ffmpeg g++ cmake
+      - name: Install macOS ffmpeg
+        if: runner.os == 'macOS'
+        run: brew install ffmpeg
+      - name: Install Windows ffmpeg
+        if: runner.os == 'Windows'
+        run: choco install ffmpeg -y --no-progress
+      - name: Build CLI
+        run: cargo build --release --features cli --bin gemini-sparkle-remove
+      - name: Stage binary
+        shell: bash
+        run: |
+          if [ -f target/release/gemini-sparkle-remove.exe ]; then
+            cp target/release/gemini-sparkle-remove.exe "${{ matrix.artifact }}"
+          else
+            cp target/release/gemini-sparkle-remove "${{ matrix.artifact }}"
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.artifact }}
+
+  github-release:
+    name: GitHub Release
+    needs: [crate, bin]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
       - name: Create GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          crate="target/package/gemini-sparkle-remove-${VERSION}.crate"
+          ls -la dist
           gh release create "$GITHUB_REF_NAME" \
             --title "$GITHUB_REF_NAME" \
             --generate-notes \
-            "$crate" \
-            SHA256SUMS.txt
+            dist/*

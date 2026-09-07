@@ -29,22 +29,40 @@ jobs:
         run: cargo test
 
   video:
-    name: video (ubuntu, system-ffmpeg, all-features)
-    runs-on: ubuntu-latest
-    timeout-minutes: 45
+    name: video (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
     env:
       GSR_SKIP_FFMPEG_DOWNLOAD: "1"
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - name: Install system ffmpeg and C++ link deps
+      - uses: actions/cache@v4
+        with:
+          path: third_party/ncnn-src
+          key: ncnn-20260526-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('build.rs', 'scripts/build_ncnn_static.sh') }}
+      - name: Install Linux deps
+        if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends ffmpeg g++ libgomp1
+          sudo apt-get install -y --no-install-recommends ffmpeg g++ cmake
           ffmpeg -version | head -n 1
-          ffprobe -version | head -n 1
-      - name: Test all video features (no bundled ffmpeg download)
+          cmake --version | head -n 1
+      - name: Install macOS ffmpeg
+        if: runner.os == 'macOS'
+        run: brew install ffmpeg
+      - name: Install Windows ffmpeg
+        if: runner.os == 'Windows'
+        run: choco install ffmpeg -y --no-progress
+      - name: Test all features (system ffmpeg, per-target ncnn)
         run: cargo test --all-features
-      - name: Release-build library and examples
+      - name: Release-build CLI
+        run: cargo build --release --features cli --bin gemini-sparkle-remove
+      - name: Release-build examples
+        if: runner.os == 'Linux'
         run: cargo build --release --examples --all-features

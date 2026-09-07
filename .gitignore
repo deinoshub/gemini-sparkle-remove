@@ -1,7 +1,12 @@
 /target
 .DS_Store
 .superpowers/
+# ncnn source + per-target cmake build (never commit)
 third_party/ncnn-src/
+third_party/ncnn/**
+!third_party/ncnn/README.md
+!third_party/ncnn/shim/
+!third_party/ncnn/shim/**
 # Build-time static ffmpeg/ffprobe cache (multi-100MB; never commit)
 third_party/ffmpeg/**
 !third_party/ffmpeg/README.md
