@@ -47,16 +47,16 @@ jobs:
         run: cargo test --features video-fdncnn,system-ffmpeg --lib --tests
       - name: Package crate
         run: cargo package
-      - name: Checksums
+      - name: Stage crate and checksums
         run: |
           set -euo pipefail
-          crate="target/package/gemini-unmark-${VERSION}.crate"
-          sha256sum "$crate" | tee SHA256SUMS.txt
+          cp "target/package/gemini-unmark-${VERSION}.crate" .
+          sha256sum "gemini-unmark-${VERSION}.crate" | tee SHA256SUMS.txt
       - uses: actions/upload-artifact@v4
         with:
           name: crate
           path: |
-            target/package/gemini-unmark-*.crate
+            gemini-unmark-*.crate
             SHA256SUMS.txt
 
   bin:
@@ -123,7 +123,8 @@ jobs:
         run: |
           set -euo pipefail
           ls -la dist
+          mapfile -t files < <(find dist -type f | sort)
           gh release create "$GITHUB_REF_NAME" \
             --title "$GITHUB_REF_NAME" \
             --generate-notes \
-            dist/*
+            "${files[@]}"
