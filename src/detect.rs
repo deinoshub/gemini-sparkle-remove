@@ -10,12 +10,18 @@ use crate::WatermarkTemplate;
 const MAX_SILHOUETTE_SURVIVAL: f64 = 0.80;
 
 /// Looser Gate 1 used only on the canonical inset window (88–104).
-/// Faint 2K gravel sparkles measure ~0.92; the wide pass stays at 0.80 so
-/// off-mark rock fits still fail.
-const MAX_SILHOUETTE_SURVIVAL_CANON: f64 = 0.93;
+/// Faint 2K marks on busy texture measure ~0.92–0.96; the wide pass stays at
+/// 0.80 so off-mark rock fits still fail.
+const MAX_SILHOUETTE_SURVIVAL_CANON: f64 = 0.98;
 
 /// Gate 2: leftover silhouette energy vs nearby control patches.
 const MAX_SILHOUETTE_VS_CONTROL: f64 = 3.0;
+
+/// Strong Gate 1 (outline mostly gone) may sit on a locally busier patch than
+/// its neighbors (wood crack under the sparkle, Gate 2 ~3.46). Documented
+/// rock impostor is ~3.9, so stay below that.
+const STRONG_SURVIVAL: f64 = 0.70;
+const STRONG_GATE2: f64 = 3.75;
 
 /// Scale search bounds (mark is ~48px in real samples).
 const MIN_SIZE: u32 = 42;
@@ -133,14 +139,8 @@ fn search(
         return None;
     }
 
-    // Gate 1
-    if survival > max_survival {
-        return None;
-    }
-
-    // Gate 2
     let control = control_edges(img_w, img_h, img, &best_tpl, best_x, best_y);
-    if control > 1e-6 && best_after / control > MAX_SILHOUETTE_VS_CONTROL {
+    if !gates_ok(survival, best_after, control, max_survival) {
         return None;
     }
 
@@ -152,6 +152,24 @@ fn search(
         residual: survival,
         template: best_tpl,
     })
+}
+
+fn gates_ok(survival: f64, after: f64, control: f64, max_survival: f64) -> bool {
+    if !survival.is_finite() {
+        return false;
+    }
+    let gate2 = if control > 1e-6 {
+        after / control
+    } else {
+        0.0
+    };
+    if survival <= STRONG_SURVIVAL && gate2 <= STRONG_GATE2 {
+        return true;
+    }
+    if survival > max_survival {
+        return false;
+    }
+    control <= 1e-6 || gate2 <= MAX_SILHOUETTE_VS_CONTROL
 }
 
 /// Gradient energy along the template silhouette (optionally after reverse-blend).
@@ -409,7 +427,7 @@ fn ncc_search(img_w: u32, img_h: u32, img: &[u8]) -> Option<Match> {
         return None;
     }
     let control = control_edges(img_w, img_h, img, &tpl, x, y);
-    if control > 1e-6 && after / control > MAX_SILHOUETTE_VS_CONTROL {
+    if !gates_ok(survival, after, control, NCC_SURVIVAL - 1e-9) {
         return None;
     }
     Some(Match {
@@ -533,6 +551,34 @@ mod tests {
         assert!((m.y as i32 - 119).abs() <= 8, "y={}", m.y);
         assert!((42..=56).contains(&m.width));
         assert!(m.residual <= 0.93, "residual={}", m.residual);
+    }
+
+    #[test]
+    fn detects_sparkle_on_2k_wood_crop() {
+        // Strong Gate 1 (~0.52) but Gate 2 ~3.46 because the mark sits on a wood crack.
+        let img = image::open("tests/fixtures/sparkle_wood_2k.png")
+            .expect("fixture")
+            .to_rgba8();
+        let (w, h) = (img.width(), img.height());
+        let m = match_watermark(w, h, img.as_raw()).expect("should detect sparkle on wood grain");
+        assert!((m.x as i32 - 119).abs() <= 8, "x={}", m.x);
+        assert!((m.y as i32 - 119).abs() <= 8, "y={}", m.y);
+        assert!((42..=56).contains(&m.width));
+        assert!(m.residual <= 0.70, "residual={}", m.residual);
+    }
+
+    #[test]
+    fn detects_sparkle_on_2k_asphalt_crop() {
+        // Faint mark on wet asphalt: Gate 1 ~0.96, Gate 2 ~1.14.
+        let img = image::open("tests/fixtures/sparkle_asphalt_2k.png")
+            .expect("fixture")
+            .to_rgba8();
+        let (w, h) = (img.width(), img.height());
+        let m = match_watermark(w, h, img.as_raw()).expect("should detect faint asphalt sparkle");
+        assert!((m.x as i32 - 119).abs() <= 8, "x={}", m.x);
+        assert!((m.y as i32 - 119).abs() <= 8, "y={}", m.y);
+        assert!((42..=56).contains(&m.width));
+        assert!(m.residual <= 0.98, "residual={}", m.residual);
     }
 
     #[test]
