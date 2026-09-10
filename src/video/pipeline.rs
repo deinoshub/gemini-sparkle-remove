@@ -591,7 +591,6 @@ fn encode_frames_raw(
         "18".into(),
         "-movflags".into(),
         "+faststart".into(),
-        "-shortest".into(),
         output_s.to_string(),
     ]);
 
@@ -850,5 +849,85 @@ mod tests {
                 result.frames_processed
             );
         }
+    }
+
+    fn count_video_frames(path: &Path) -> Result<u32> {
+        let s = ffprobe_csv(&[
+            "-v",
+            "error",
+            "-select_streams",
+            "v:0",
+            "-count_frames",
+            "-show_entries",
+            "stream=nb_read_frames",
+            "-of",
+            "csv=p=0",
+            path_str(path)?,
+        ])?;
+        s.trim()
+            .parse()
+            .map_err(|_| VideoError::Ffmpeg(format!("bad frame count {s:?}")))
+    }
+
+    fn lavfi_audio_mp4(path: &Path, audio_secs: &str) -> Result<()> {
+        let out = Command::new(ffmpeg_bin())
+            .args([
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-y",
+                "-f",
+                "lavfi",
+                "-i",
+                &format!("sine=f=440:d={audio_secs}"),
+                "-f",
+                "lavfi",
+                "-i",
+                "color=c=black:s=160x96:r=24:d=1",
+                "-c:v",
+                "libx264",
+                "-pix_fmt",
+                "yuv420p",
+                "-c:a",
+                "aac",
+                path_str(path)?,
+            ])
+            .output()
+            .map_err(|e| VideoError::Ffmpeg(format!("lavfi src: {e}")))?;
+        if !out.status.success() {
+            let err = String::from_utf8_lossy(&out.stderr);
+            return Err(VideoError::Ffmpeg(format!(
+                "lavfi src failed: {}",
+                err.trim()
+            )));
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn encode_keeps_all_frames_when_audio_is_shorter() {
+        if !ffmpeg_available() {
+            eprintln!("skip encode_keeps_all_frames_when_audio_is_shorter: ffmpeg/ffprobe not available");
+            return;
+        }
+        let dir = tempfile::tempdir().expect("temp");
+        let src = dir.path().join("src.mp4");
+        lavfi_audio_mp4(&src, "1").expect("lavfi src");
+        let w = 160u32;
+        let h = 96u32;
+        let n = 48u32;
+        let nbytes = frame_nbytes(w, h).unwrap();
+        let frames = vec![vec![0u8; nbytes]; n as usize];
+        let probe = ProbeInfo {
+            width: w,
+            height: h,
+            fps: 24.0,
+            duration: 2.0,
+            has_audio: true,
+        };
+        let out = dir.path().join("out.mp4");
+        encode_frames_raw(&frames, &src, &out, &probe).expect("encode");
+        let got = count_video_frames(&out).expect("count");
+        assert_eq!(got, n, "expected {n} video frames, got {got}");
     }
 }
