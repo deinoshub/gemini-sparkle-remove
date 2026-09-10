@@ -835,6 +835,12 @@ mod tests {
     }
 
     #[test]
+    fn noise_without_overlay_is_not_found() {
+        let data = noise_canvas(400, 300);
+        assert!(match_watermark(400, 300, &data).is_none());
+    }
+
+    #[test]
     fn noise_with_planted_sparkle_is_found() {
         let w = 400u32;
         let h = 300u32;
