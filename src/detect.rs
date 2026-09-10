@@ -41,6 +41,12 @@ const MIN_NCC: f32 = 0.70;
 /// After NCC proposes, reject only if reverse-blend *adds* silhouette edges.
 const NCC_SURVIVAL: f64 = 1.0;
 
+/// NCC Gate 2 may use the strong-path 3.75 limit when survival is this or lower.
+const NCC_RELAX_SURVIVAL: f64 = 0.85;
+
+/// How many lowest-survival silhouette placements to try through the gates.
+const TOP_K: usize = 5;
+
 /// Half-width of the border kept around a patch so gradients are defined.
 const PATCH_MARGIN: i32 = 3;
 
@@ -68,9 +74,80 @@ pub fn match_watermark(width: u32, height: u32, data: &[u8]) -> Option<Match> {
         88,
         104,
         MAX_SILHOUETTE_SURVIVAL_CANON,
+        InsetWalk::Independent,
     )
-    .or_else(|| search(width, height, data, MIN_INSET, MAX_INSET, MAX_SILHOUETTE_SURVIVAL))
+    .or_else(|| {
+        search(
+            width,
+            height,
+            data,
+            MIN_INSET,
+            MAX_INSET,
+            MAX_SILHOUETTE_SURVIVAL,
+            InsetWalk::Diagonal,
+        )
+    })
     .or_else(|| ncc_search(width, height, data))
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum InsetWalk {
+    Diagonal,
+    Independent,
+}
+
+#[derive(Clone, Debug)]
+struct SilhouetteCand {
+    x: u32,
+    y: u32,
+    size: u32,
+    survival: f64,
+    after: f64,
+    template: WatermarkTemplate,
+}
+
+fn cand_cmp(a: &SilhouetteCand, b: &SilhouetteCand, img_w: u32, img_h: u32) -> std::cmp::Ordering {
+    match a.survival.partial_cmp(&b.survival) {
+        Some(std::cmp::Ordering::Equal) | None => {
+            let da = ((img_w - a.x - a.size) as i32 - (img_h - a.y - a.size) as i32).unsigned_abs();
+            let db = ((img_w - b.x - b.size) as i32 - (img_h - b.y - b.size) as i32).unsigned_abs();
+            da.cmp(&db).then_with(|| a.size.cmp(&b.size))
+        }
+        Some(o) => o,
+    }
+}
+
+fn consider_cand(cands: &mut Vec<SilhouetteCand>, c: SilhouetteCand, img_w: u32, img_h: u32) {
+    cands.push(c);
+    cands.sort_by(|a, b| cand_cmp(a, b, img_w, img_h));
+    if cands.len() > TOP_K {
+        cands.pop();
+    }
+}
+
+fn choose_match(
+    mut cands: Vec<SilhouetteCand>,
+    img_w: u32,
+    img_h: u32,
+    img: &[u8],
+    max_survival: f64,
+) -> Option<Match> {
+    cands.sort_by(|a, b| cand_cmp(a, b, img_w, img_h));
+    cands.truncate(TOP_K);
+    for c in cands {
+        let control = control_edges(img_w, img_h, img, &c.template, c.x, c.y);
+        if gates_ok(c.survival, c.after, control, max_survival) {
+            return Some(Match {
+                x: c.x,
+                y: c.y,
+                width: c.size,
+                height: c.size,
+                residual: c.survival,
+                template: c.template,
+            });
+        }
+    }
+    None
 }
 
 fn search(
@@ -80,16 +157,46 @@ fn search(
     min_inset: u32,
     max_inset: u32,
     max_survival: f64,
+    walk: InsetWalk,
 ) -> Option<Match> {
     let base = sparkle_template();
     let edge = img_w.min(img_h);
 
-    let mut best_x = 0u32;
-    let mut best_y = 0u32;
-    let mut best_size = 0u32;
-    let mut best_tpl: Option<WatermarkTemplate> = None;
-    let mut best_after = f64::INFINITY;
-    let mut survival = f64::INFINITY;
+    let mut cands: Vec<SilhouetteCand> = Vec::new();
+
+    let mut walk_xy = |mx: u32, my: u32, tpl: &WatermarkTemplate, s: u32| {
+        if img_w < mx + s || img_h < my + s {
+            return;
+        }
+        let x = img_w - mx - s;
+        let y = img_h - my - s;
+
+        let before = silhouette_edges(img_w, img_h, img, tpl, x, y, false);
+        if !before.is_finite() || before < 1e-6 {
+            return;
+        }
+        let after = silhouette_edges(img_w, img_h, img, tpl, x, y, true);
+        if !after.is_finite() {
+            return;
+        }
+
+        let fraction = after / before;
+        if fraction.is_finite() {
+            consider_cand(
+                &mut cands,
+                SilhouetteCand {
+                    x,
+                    y,
+                    size: s,
+                    survival: fraction,
+                    after,
+                    template: tpl.clone(),
+                },
+                img_w,
+                img_h,
+            );
+        }
+    };
 
     for s in MIN_SIZE..=MAX_SIZE {
         if s > edge / 2 {
@@ -103,66 +210,31 @@ fn search(
             } else {
                 with_opacity(&sized, alpha)
             };
-
-            for ins in min_inset..=max_inset {
-                // May underflow on tiny images; skip those placements.
-                if img_w < ins + s || img_h < ins + s {
-                    continue;
+            match walk {
+                InsetWalk::Diagonal => {
+                    for ins in min_inset..=max_inset {
+                        walk_xy(ins, ins, &tpl, s);
+                    }
                 }
-                let x = img_w - ins - s;
-                let y = img_h - ins - s;
-
-                let before = silhouette_edges(img_w, img_h, img, &tpl, x, y, false);
-                if !before.is_finite() || before < 1e-6 {
-                    continue;
-                }
-                let after = silhouette_edges(img_w, img_h, img, &tpl, x, y, true);
-                if !after.is_finite() {
-                    continue;
-                }
-
-                let fraction = after / before;
-                if fraction < survival {
-                    survival = fraction;
-                    best_after = after;
-                    best_x = x;
-                    best_y = y;
-                    best_size = s;
-                    best_tpl = Some(tpl.clone());
+                InsetWalk::Independent => {
+                    for my in min_inset..=max_inset {
+                        for mx in min_inset..=max_inset {
+                            walk_xy(mx, my, &tpl, s);
+                        }
+                    }
                 }
             }
         }
     }
 
-    let best_tpl = best_tpl?;
-    if !survival.is_finite() {
-        return None;
-    }
-
-    let control = control_edges(img_w, img_h, img, &best_tpl, best_x, best_y);
-    if !gates_ok(survival, best_after, control, max_survival) {
-        return None;
-    }
-
-    Some(Match {
-        x: best_x,
-        y: best_y,
-        width: best_size,
-        height: best_size,
-        residual: survival,
-        template: best_tpl,
-    })
+    choose_match(cands, img_w, img_h, img, max_survival)
 }
 
 fn gates_ok(survival: f64, after: f64, control: f64, max_survival: f64) -> bool {
     if !survival.is_finite() {
         return false;
     }
-    let gate2 = if control > 1e-6 {
-        after / control
-    } else {
-        0.0
-    };
+    let gate2 = if control > 1e-6 { after / control } else { 0.0 };
     if survival <= STRONG_SURVIVAL && gate2 <= STRONG_GATE2 {
         return true;
     }
@@ -170,6 +242,24 @@ fn gates_ok(survival: f64, after: f64, control: f64, max_survival: f64) -> bool 
         return false;
     }
     control <= 1e-6 || gate2 <= MAX_SILHOUETTE_VS_CONTROL
+}
+
+fn ncc_gates_ok(survival: f64, gate2: f64, control: f64) -> bool {
+    if !survival.is_finite() {
+        return false;
+    }
+    if survival <= STRONG_SURVIVAL && gate2 <= STRONG_GATE2 {
+        return true;
+    }
+    if survival >= NCC_SURVIVAL {
+        return false;
+    }
+    let limit = if survival <= NCC_RELAX_SURVIVAL {
+        STRONG_GATE2
+    } else {
+        MAX_SILHOUETTE_VS_CONTROL
+    };
+    control <= 1e-6 || gate2 <= limit
 }
 
 /// Gradient energy along the template silhouette (optionally after reverse-blend).
@@ -245,14 +335,7 @@ struct Patch {
 }
 
 /// Copy a margin-padded window around the template's footprint.
-fn grab(
-    img_w: u32,
-    img_h: u32,
-    img: &[u8],
-    size: u32,
-    at_x: u32,
-    at_y: u32,
-) -> Option<Patch> {
+fn grab(img_w: u32, img_h: u32, img: &[u8], size: u32, at_x: u32, at_y: u32) -> Option<Patch> {
     let m = PATCH_MARGIN;
     let pw = size as i32 + m * 2;
     let x0 = at_x as i32 - m;
@@ -379,8 +462,8 @@ fn scale_template(tpl: &WatermarkTemplate, size: u32) -> WatermarkTemplate {
 
 /// Independent-margin NCC over the bottom-right, confirmed by silhouette gates.
 ///
-/// Silhouette search only walks the diagonal (`inset_x == inset_y`). NCC covers
-/// the off-diagonal cases; it never accepts on score alone.
+/// Wide silhouette search stays diagonal. NCC covers off-diagonal placements
+/// outside the canonical window; it never accepts on score alone.
 fn ncc_search(img_w: u32, img_h: u32, img: &[u8]) -> Option<Match> {
     let base = sparkle_template();
     let luma = rgba_to_luma(img, img_w, img_h);
@@ -391,7 +474,13 @@ fn ncc_search(img_w: u32, img_h: u32, img: &[u8]) -> Option<Match> {
             break;
         }
         let tpl = scale_template(&base, s);
-        let alpha: Vec<f32> = tpl.data.iter().skip(3).step_by(4).map(|&a| a as f32).collect();
+        let alpha: Vec<f32> = tpl
+            .data
+            .iter()
+            .skip(3)
+            .step_by(4)
+            .map(|&a| a as f32)
+            .collect();
         let mean = mean_f32(&alpha);
         let tnorm = centered_norm_f32(&alpha, mean);
         if tnorm < 1e-6 {
@@ -423,11 +512,9 @@ fn ncc_search(img_w: u32, img_h: u32, img: &[u8]) -> Option<Match> {
         return None;
     }
     let survival = after / before;
-    if survival >= NCC_SURVIVAL {
-        return None;
-    }
     let control = control_edges(img_w, img_h, img, &tpl, x, y);
-    if !gates_ok(survival, after, control, NCC_SURVIVAL - 1e-9) {
+    let gate2 = if control > 1e-6 { after / control } else { 0.0 };
+    if survival >= NCC_SURVIVAL || !ncc_gates_ok(survival, gate2, control) {
         return None;
     }
     Some(Match {
@@ -525,16 +612,8 @@ mod tests {
         let (w, h) = (img.width(), img.height());
         let m = match_watermark(w, h, img.as_raw()).expect("should detect sparkle");
         // Prior gwr and this port both land at ~(1255, 647) on 1376×768 (inset ~73, size 48).
-        assert!(
-            (m.x as i32 - 1255).abs() <= 20,
-            "x={} (want ~1255)",
-            m.x
-        );
-        assert!(
-            (m.y as i32 - 647).abs() <= 20,
-            "y={} (want ~647)",
-            m.y
-        );
+        assert!((m.x as i32 - 1255).abs() <= 20, "x={} (want ~1255)", m.x);
+        assert!((m.y as i32 - 647).abs() <= 20, "y={} (want ~647)", m.y);
         assert!((42..=56).contains(&m.width), "width={}", m.width);
         assert_eq!(m.width, m.height);
         assert!(m.residual <= 0.80, "residual={}", m.residual);
@@ -628,5 +707,144 @@ mod tests {
         let m = match_watermark(w, h, &data).expect("NCC+silhouette should find off-diagonal mark");
         assert!((m.x as i32 - x as i32).abs() <= 4, "x={} want {x}", m.x);
         assert!((m.y as i32 - y as i32).abs() <= 4, "y={} want {y}", m.y);
+    }
+
+    fn paint_sparkle(data: &mut [u8], w: u32, x: u32, y: u32) {
+        let tpl = crate::sparkle_template();
+        for ty in 0..tpl.height {
+            for tx in 0..tpl.width {
+                let ti = ((ty * tpl.width + tx) * 4) as usize;
+                let a = tpl.data[ti + 3] as f32 / 255.0;
+                if a == 0.0 {
+                    continue;
+                }
+                let oi = (((y + ty) * w + (x + tx)) * 4) as usize;
+                for c in 0..3 {
+                    data[oi + c] = (a * tpl.data[ti + c] as f32 + (1.0 - a) * data[oi + c] as f32)
+                        .round() as u8;
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn canonical_independent_finds_off_diagonal_88_104() {
+        // Both insets sit in [88, 104]; diagonal walk never lands on this pair.
+        let w = 400u32;
+        let h = 300u32;
+        let s = crate::SPARKLE_SIZE;
+        let x = w - 88 - s;
+        let y = h - 104 - s;
+        let mut data = vec![0x6a_u8; (w * h * 4) as usize];
+        for i in (0..data.len()).step_by(4) {
+            data[i + 3] = 255;
+        }
+        paint_sparkle(&mut data, w, x, y);
+
+        let m = search(
+            w,
+            h,
+            &data,
+            88,
+            104,
+            MAX_SILHOUETTE_SURVIVAL_CANON,
+            InsetWalk::Independent,
+        )
+        .expect("canonical independent search must find 88×104 without NCC");
+        assert!((m.x as i32 - x as i32).abs() <= 4, "x={} want {x}", m.x);
+        assert!((m.y as i32 - y as i32).abs() <= 4, "y={} want {y}", m.y);
+    }
+
+    #[test]
+    fn top_k_skips_failing_lowest_survival() {
+        let tpl = crate::sparkle_template();
+        let loser = SilhouetteCand {
+            x: 80,
+            y: 80,
+            size: tpl.width,
+            survival: 0.50,
+            after: 1.0e6,
+            template: tpl.clone(),
+        };
+        let winner = SilhouetteCand {
+            x: 40,
+            y: 40,
+            size: tpl.width,
+            survival: 0.60,
+            after: 1.0,
+            template: tpl,
+        };
+        // Fake image large enough for control_edges on winner (x=40,y=40,s=48).
+        // Texture so control_edges is non-tiny: uniform grey has zero gradient,
+        // and gates_ok treats control <= 1e-6 as a Gate 2 pass.
+        let w = 200u32;
+        let h = 200u32;
+        let mut data = vec![0u8; (w * h * 4) as usize];
+        for y in 0..h {
+            for x in 0..w {
+                let i = ((y * w + x) * 4) as usize;
+                let v = 80u8.wrapping_add(((x.wrapping_mul(13)) ^ (y.wrapping_mul(7))) as u8);
+                data[i] = v;
+                data[i + 1] = v.saturating_sub(9);
+                data[i + 2] = v.saturating_add(11);
+                data[i + 3] = 255;
+            }
+        }
+        // Loser at (80,80) so grab() succeeds; after=1e6 so Gate 2 fails even
+        // if control is modest. Winner after=1.0 passes Gate 2.
+        let got = choose_match(vec![loser, winner.clone()], w, h, &data, 0.98)
+            .expect("second candidate must pass after first fails gates");
+        assert_eq!(got.x, 40);
+        assert_eq!(got.y, 40);
+        assert!((got.residual - 0.60).abs() < 1e-9);
+    }
+
+    #[test]
+    fn ncc_gate2_relaxes_when_survival_le_085() {
+        // survival 0.80, gate2 3.50 → must pass (wood-ish, not rock 3.9)
+        assert!(ncc_gates_ok(0.80, 3.50, 1.0));
+    }
+
+    #[test]
+    fn ncc_gate2_stays_strict_when_survival_gt_085() {
+        assert!(!ncc_gates_ok(0.90, 3.50, 1.0));
+    }
+
+    #[test]
+    fn ncc_gate2_still_rejects_rock_impostor() {
+        assert!(!ncc_gates_ok(0.80, 3.90, 1.0));
+    }
+
+    fn noise_canvas(w: u32, h: u32) -> Vec<u8> {
+        // XOR lattice around mid-grey. Full-range XOR (unmarked_busy_noise) makes
+        // a peak-α≈0.31 overlay smooth the patch (survival > 1), so bound AMP.
+        let mut data = vec![0u8; (w * h * 4) as usize];
+        const AMP: u8 = 24;
+        for y in 0..h {
+            for x in 0..w {
+                let i = ((y * w + x) * 4) as usize;
+                let n = (((x.wrapping_mul(37)) ^ (y.wrapping_mul(91))) % (AMP as u32 * 2)) as u8;
+                let v = 0x6a_u8.saturating_add(n).saturating_sub(AMP);
+                data[i] = v;
+                data[i + 1] = v.saturating_sub(7);
+                data[i + 2] = v.saturating_add(5);
+                data[i + 3] = 255;
+            }
+        }
+        data
+    }
+
+    #[test]
+    fn noise_with_planted_sparkle_is_found() {
+        let w = 400u32;
+        let h = 300u32;
+        let s = crate::SPARKLE_SIZE;
+        let x = w - 96 - s;
+        let y = h - 96 - s;
+        let mut data = noise_canvas(w, h);
+        paint_sparkle(&mut data, w, x, y);
+        let m = match_watermark(w, h, &data).expect("planted sparkle on noise");
+        assert!((m.x as i32 - x as i32).abs() <= 4);
+        assert!((m.y as i32 - y as i32).abs() <= 4);
     }
 }
