@@ -9,6 +9,11 @@ use crate::WatermarkTemplate;
 /// Gate 1: removal must destroy the mark's own outline.
 const MAX_SILHOUETTE_SURVIVAL: f64 = 0.80;
 
+/// Looser Gate 1 used only on the canonical inset window (88–104).
+/// Faint 2K gravel sparkles measure ~0.92; the wide pass stays at 0.80 so
+/// off-mark rock fits still fail.
+const MAX_SILHOUETTE_SURVIVAL_CANON: f64 = 0.93;
+
 /// Gate 2: leftover silhouette energy vs nearby control patches.
 const MAX_SILHOUETTE_VS_CONTROL: f64 = 3.0;
 
@@ -43,7 +48,15 @@ pub struct Match {
 pub fn match_watermark(width: u32, height: u32, data: &[u8]) -> Option<Match> {
     debug_assert_eq!(data.len(), (width as usize) * (height as usize) * 4);
     // Canonical placement first; wide search only if that fails (older marks).
-    search(width, height, data, 88, 104).or_else(|| search(width, height, data, MIN_INSET, MAX_INSET))
+    search(
+        width,
+        height,
+        data,
+        88,
+        104,
+        MAX_SILHOUETTE_SURVIVAL_CANON,
+    )
+    .or_else(|| search(width, height, data, MIN_INSET, MAX_INSET, MAX_SILHOUETTE_SURVIVAL))
 }
 
 fn search(
@@ -52,6 +65,7 @@ fn search(
     img: &[u8],
     min_inset: u32,
     max_inset: u32,
+    max_survival: f64,
 ) -> Option<Match> {
     let base = sparkle_template();
     let edge = img_w.min(img_h);
@@ -112,7 +126,7 @@ fn search(
     }
 
     // Gate 1
-    if survival > MAX_SILHOUETTE_SURVIVAL {
+    if survival > max_survival {
         return None;
     }
 
@@ -362,5 +376,37 @@ mod tests {
         assert!((42..=56).contains(&m.width), "width={}", m.width);
         assert_eq!(m.width, m.height);
         assert!(m.residual <= 0.80, "residual={}", m.residual);
+    }
+
+    #[test]
+    fn detects_sparkle_on_2k_gravel_crop() {
+        let img = image::open("tests/fixtures/sparkle_gravel_2k.png")
+            .expect("fixture")
+            .to_rgba8();
+        let (w, h) = (img.width(), img.height());
+        let m = match_watermark(w, h, img.as_raw()).expect("should detect faint 2K gravel sparkle");
+        assert!((m.x as i32 - 119).abs() <= 8, "x={}", m.x);
+        assert!((m.y as i32 - 119).abs() <= 8, "y={}", m.y);
+        assert!((42..=56).contains(&m.width));
+        assert!(m.residual <= 0.93, "residual={}", m.residual);
+    }
+
+    #[test]
+    fn unmarked_busy_noise_is_not_a_match() {
+        // High-frequency luma noise, no composited sparkle.
+        let w = 256u32;
+        let h = 256u32;
+        let mut data = vec![0u8; (w * h * 4) as usize];
+        for y in 0..h {
+            for x in 0..w {
+                let i = ((y * w + x) * 4) as usize;
+                let v = (((x.wrapping_mul(37)) ^ (y.wrapping_mul(91))) as u8).saturating_add(40);
+                data[i] = v;
+                data[i + 1] = v.saturating_sub(7);
+                data[i + 2] = v.saturating_add(5);
+                data[i + 3] = 255;
+            }
+        }
+        assert!(match_watermark(w, h, &data).is_none());
     }
 }
