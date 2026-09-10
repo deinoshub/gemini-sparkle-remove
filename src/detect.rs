@@ -28,6 +28,13 @@ const MAX_INSET: u32 = 116;
 /// Opacity scales for version differences.
 const ALPHA_SCALES: [f64; 4] = [1.0, 1.25, 1.55, 1.9];
 
+/// NCC locator (independent right/bottom margins). High on purpose so gravel
+/// false peaks (posing 1K sandal ~0.61) never become the proposal.
+const MIN_NCC: f32 = 0.70;
+
+/// After NCC proposes, reject only if reverse-blend *adds* silhouette edges.
+const NCC_SURVIVAL: f64 = 1.0;
+
 /// Half-width of the border kept around a patch so gradients are defined.
 const PATCH_MARGIN: i32 = 3;
 
@@ -57,6 +64,7 @@ pub fn match_watermark(width: u32, height: u32, data: &[u8]) -> Option<Match> {
         MAX_SILHOUETTE_SURVIVAL_CANON,
     )
     .or_else(|| search(width, height, data, MIN_INSET, MAX_INSET, MAX_SILHOUETTE_SURVIVAL))
+    .or_else(|| ncc_search(width, height, data))
 }
 
 fn search(
@@ -351,6 +359,142 @@ fn scale_template(tpl: &WatermarkTemplate, size: u32) -> WatermarkTemplate {
     }
 }
 
+/// Independent-margin NCC over the bottom-right, confirmed by silhouette gates.
+///
+/// Silhouette search only walks the diagonal (`inset_x == inset_y`). NCC covers
+/// the off-diagonal cases; it never accepts on score alone.
+fn ncc_search(img_w: u32, img_h: u32, img: &[u8]) -> Option<Match> {
+    let base = sparkle_template();
+    let luma = rgba_to_luma(img, img_w, img_h);
+    let mut best: Option<(f32, u32, u32, u32, WatermarkTemplate)> = None;
+
+    for s in (MIN_SIZE..=MAX_SIZE).step_by(2) {
+        if s > img_w.min(img_h) / 2 {
+            break;
+        }
+        let tpl = scale_template(&base, s);
+        let alpha: Vec<f32> = tpl.data.iter().skip(3).step_by(4).map(|&a| a as f32).collect();
+        let mean = mean_f32(&alpha);
+        let tnorm = centered_norm_f32(&alpha, mean);
+        if tnorm < 1e-6 {
+            continue;
+        }
+        for mx in MIN_INSET..=MAX_INSET {
+            for my in MIN_INSET..=MAX_INSET {
+                if img_w < mx + s || img_h < my + s {
+                    continue;
+                }
+                let x = img_w - mx - s;
+                let y = img_h - my - s;
+                let score = ncc_at(&luma, img_w, x, y, s, s, &alpha, mean, tnorm);
+                if score < MIN_NCC {
+                    continue;
+                }
+                let take = best.as_ref().map(|(b, ..)| score > *b).unwrap_or(true);
+                if take {
+                    best = Some((score, x, y, s, tpl.clone()));
+                }
+            }
+        }
+    }
+
+    let (_, x, y, s, tpl) = best?;
+    let before = silhouette_edges(img_w, img_h, img, &tpl, x, y, false);
+    let after = silhouette_edges(img_w, img_h, img, &tpl, x, y, true);
+    if !before.is_finite() || before < 1e-6 || !after.is_finite() {
+        return None;
+    }
+    let survival = after / before;
+    if survival >= NCC_SURVIVAL {
+        return None;
+    }
+    let control = control_edges(img_w, img_h, img, &tpl, x, y);
+    if control > 1e-6 && after / control > MAX_SILHOUETTE_VS_CONTROL {
+        return None;
+    }
+    Some(Match {
+        x,
+        y,
+        width: s,
+        height: s,
+        residual: survival,
+        template: tpl,
+    })
+}
+
+fn rgba_to_luma(rgba: &[u8], width: u32, height: u32) -> Vec<f32> {
+    let n = (width as usize) * (height as usize);
+    let mut out = Vec::with_capacity(n);
+    for i in 0..n {
+        let o = i * 4;
+        let r = rgba[o] as f32;
+        let g = rgba[o + 1] as f32;
+        let b = rgba[o + 2] as f32;
+        out.push(0.299 * r + 0.587 * g + 0.114 * b);
+    }
+    out
+}
+
+fn mean_f32(v: &[f32]) -> f32 {
+    if v.is_empty() {
+        return 0.0;
+    }
+    v.iter().sum::<f32>() / v.len() as f32
+}
+
+fn centered_norm_f32(v: &[f32], mean: f32) -> f32 {
+    let mut s = 0.0f32;
+    for &x in v {
+        let d = x - mean;
+        s += d * d;
+    }
+    s.sqrt()
+}
+
+fn ncc_at(
+    luma: &[f32],
+    stride: u32,
+    x: u32,
+    y: u32,
+    mw: u32,
+    mh: u32,
+    alpha: &[f32],
+    tpl_mean: f32,
+    tpl_norm: f32,
+) -> f32 {
+    let sw = stride as usize;
+    let mw_u = mw as usize;
+    let mh_u = mh as usize;
+
+    let mut sum = 0.0f32;
+    let n = (mw_u * mh_u) as f32;
+    for row in 0..mh_u {
+        let base = ((y as usize) + row) * sw + x as usize;
+        for col in 0..mw_u {
+            sum += luma[base + col];
+        }
+    }
+    let patch_mean = sum / n;
+
+    let mut dot = 0.0f32;
+    let mut patch_ss = 0.0f32;
+    for row in 0..mh_u {
+        let base = ((y as usize) + row) * sw + x as usize;
+        let arow = row * mw_u;
+        for col in 0..mw_u {
+            let pd = luma[base + col] - patch_mean;
+            let td = alpha[arow + col] - tpl_mean;
+            dot += pd * td;
+            patch_ss += pd * pd;
+        }
+    }
+    let patch_norm = patch_ss.sqrt();
+    if patch_norm < 1e-6 || tpl_norm < 1e-6 {
+        return -1.0;
+    }
+    dot / (patch_norm * tpl_norm)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -408,5 +552,35 @@ mod tests {
             }
         }
         assert!(match_watermark(w, h, &data).is_none());
+    }
+
+    #[test]
+    fn detects_off_diagonal_sparkle_via_ncc() {
+        let w = 400u32;
+        let h = 300u32;
+        let mut data = vec![0x6a_u8; (w * h * 4) as usize];
+        for i in (0..data.len()).step_by(4) {
+            data[i + 3] = 255;
+        }
+        let tpl = crate::sparkle_template();
+        let x = w - 96 - tpl.width; // right inset 96
+        let y = h - 72 - tpl.height; // bottom inset 72
+        for ty in 0..tpl.height {
+            for tx in 0..tpl.width {
+                let ti = ((ty * tpl.width + tx) * 4) as usize;
+                let a = tpl.data[ti + 3] as f32 / 255.0;
+                if a == 0.0 {
+                    continue;
+                }
+                let oi = (((y + ty) * w + (x + tx)) * 4) as usize;
+                for c in 0..3 {
+                    data[oi + c] = (a * tpl.data[ti + c] as f32 + (1.0 - a) * data[oi + c] as f32)
+                        .round() as u8;
+                }
+            }
+        }
+        let m = match_watermark(w, h, &data).expect("NCC+silhouette should find off-diagonal mark");
+        assert!((m.x as i32 - x as i32).abs() <= 4, "x={} want {x}", m.x);
+        assert!((m.y as i32 - y as i32).abs() <= 4, "y={} want {y}", m.y);
     }
 }
