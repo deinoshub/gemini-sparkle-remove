@@ -134,6 +134,194 @@ pub fn refine_alpha_bisection(
     s.clamp(SCALE_MIN, SCALE_MAX)
 }
 
+pub const PICK_SCALE_MIN: f32 = 0.78;
+pub const PICK_SCALE_MAX: f32 = 1.12;
+pub const HOLE_LUMA_THR: f32 = 6.0;
+
+pub fn pick_alpha_by_silhouette(
+    frames: &[Vec<u8>],
+    width: u32,
+    height: u32,
+    det: &VideoDetection,
+    map: &VideoMap,
+    seed: f32,
+) -> f32 {
+    let seed = seed.clamp(PICK_SCALE_MIN, PICK_SCALE_MAX);
+    let mut trials = [seed, 1.0, 1.05, 1.12];
+    for t in trials.iter_mut() {
+        *t = t.clamp(PICK_SCALE_MIN, PICK_SCALE_MAX);
+    }
+    trials.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let mut uniq: Vec<f32> = Vec::new();
+    for t in trials {
+        if uniq.last().map(|u| (t - *u).abs() < 1e-4).unwrap_or(false) {
+            continue;
+        }
+        uniq.push(t);
+    }
+
+    let probes = probe_indices(frames.len());
+    let mut best: Option<(f32, f32)> = None; // (survival, scale)
+    for scale in uniq {
+        let mut hole = false;
+        let mut surv_sum = 0.0f32;
+        let mut surv_n = 0.0f32;
+        for &idx in &probes {
+            let frame = &frames[idx];
+            if scale_digs_hole(frame, width, height, det, map, scale) {
+                hole = true;
+                break;
+            }
+            let s = roi_silhouette_survival(frame, width, height, det, map, scale);
+            if s.is_finite() {
+                surv_sum += s;
+                surv_n += 1.0;
+            }
+        }
+        if hole || surv_n < 1.0 {
+            continue;
+        }
+        let mean = surv_sum / surv_n;
+        let take = match best {
+            None => true,
+            Some((bs, bscale)) => {
+                mean < bs - 1e-6
+                    || ((mean - bs).abs() <= 1e-6 && (scale - 1.0).abs() < (bscale - 1.0).abs())
+            }
+        };
+        if take {
+            best = Some((mean, scale));
+        }
+    }
+    best.map(|(_, s)| s).unwrap_or(seed)
+}
+
+fn probe_indices(n: usize) -> Vec<usize> {
+    if n == 0 {
+        return Vec::new();
+    }
+    let samples = 5.min(n);
+    (0..samples)
+        .map(|i| {
+            if samples == 1 {
+                0
+            } else {
+                i * (n - 1) / (samples - 1)
+            }
+        })
+        .collect()
+}
+
+pub(crate) fn scale_digs_hole(
+    frame: &[u8],
+    w: u32,
+    h: u32,
+    det: &VideoDetection,
+    map: &VideoMap,
+    scale: f32,
+) -> bool {
+    if !dims_ok(frame, w, h, det, map) {
+        return false;
+    }
+    let mut copy = frame.to_vec();
+    remove_on_frame_blend_only(&mut copy, w, h, det, map, scale);
+    let (hi, lo) = hi_lo_luma(&copy, w, h, det, map);
+    lo.is_finite() && hi.is_finite() && hi < lo - HOLE_LUMA_THR
+}
+
+fn hi_lo_luma(frame: &[u8], w: u32, h: u32, det: &VideoDetection, map: &VideoMap) -> (f32, f32) {
+    let mw = map.width as usize;
+    let mh = map.height as usize;
+    let stride = w as usize;
+    let mut hi_sum = 0.0f32;
+    let mut hi_n = 0.0f32;
+    let mut lo_sum = 0.0f32;
+    let mut lo_n = 0.0f32;
+    for py in 0..mh {
+        for px in 0..mw {
+            let a = map.alpha[py * mw + px];
+            let fx = det.x as usize + px;
+            let fy = det.y as usize + py;
+            if fx >= w as usize || fy >= h as usize {
+                continue;
+            }
+            let o = (fy * stride + fx) * 4;
+            let l = luma_u8(frame[o], frame[o + 1], frame[o + 2]);
+            if a > 0.05 {
+                hi_sum += l;
+                hi_n += 1.0;
+            } else if a < 0.02 {
+                lo_sum += l;
+                lo_n += 1.0;
+            }
+        }
+    }
+    let hi = if hi_n > 0.0 { hi_sum / hi_n } else { f32::NAN };
+    let lo = if lo_n > 0.0 { lo_sum / lo_n } else { f32::NAN };
+    (hi, lo)
+}
+
+fn roi_silhouette_survival(
+    frame: &[u8],
+    w: u32,
+    h: u32,
+    det: &VideoDetection,
+    map: &VideoMap,
+    scale: f32,
+) -> f32 {
+    let before = roi_edge_energy(frame, w, h, det, map);
+    if !before.is_finite() || before < 1e-6 {
+        return f32::INFINITY;
+    }
+    let mut copy = frame.to_vec();
+    remove_on_frame_blend_only(&mut copy, w, h, det, map, scale);
+    let after = roi_edge_energy(&copy, w, h, det, map);
+    if !after.is_finite() {
+        return f32::INFINITY;
+    }
+    after / before
+}
+
+fn roi_edge_energy(frame: &[u8], w: u32, h: u32, det: &VideoDetection, map: &VideoMap) -> f32 {
+    let mw = map.width as usize;
+    let mh = map.height as usize;
+    if mw < 3 || mh < 3 {
+        return 0.0;
+    }
+    let stride = w as usize;
+    let mut energy = 0.0f32;
+    let mut weight = 0.0f32;
+    for py in 1..mh - 1 {
+        for px in 1..mw - 1 {
+            let ax = map.alpha[py * mw + px + 1] - map.alpha[py * mw + px - 1];
+            let ay = map.alpha[(py + 1) * mw + px] - map.alpha[(py - 1) * mw + px];
+            let wt = (ax * ax + ay * ay).sqrt();
+            if wt < 0.02 {
+                continue;
+            }
+            let fx = det.x as usize + px;
+            let fy = det.y as usize + py;
+            if fx == 0 || fy == 0 || fx + 1 >= w as usize || fy + 1 >= h as usize {
+                continue;
+            }
+            let i = (fy * stride + fx) * 4;
+            let mut g = 0.0f32;
+            for c in 0..3 {
+                let gx = frame[i + 4 + c] as f32 - frame[i - 4 + c] as f32;
+                let gy = frame[i + stride * 4 + c] as f32 - frame[i - stride * 4 + c] as f32;
+                g += gx * gx + gy * gy;
+            }
+            energy += g * wt;
+            weight += wt;
+        }
+    }
+    if weight > 0.0 {
+        energy / weight
+    } else {
+        0.0
+    }
+}
+
 fn dims_ok(frame: &[u8], w: u32, h: u32, det: &VideoDetection, map: &VideoMap) -> bool {
     if w == 0 || h == 0 || map.width == 0 || map.height == 0 {
         return false;
@@ -414,5 +602,88 @@ mod tests {
         let over = residual_bias(&img, 32, 32, &det, &map, 1.15, ring);
         assert!(under > 0.0, "under-removal bias should be +, got {under}");
         assert!(over < 0.0, "over-removal bias should be -, got {over}");
+    }
+
+    #[test]
+    fn pick_prefers_true_scale_over_under_seed() {
+        let map = diamond_map_8();
+        let img = blend_on_canvas(60, &map, 1.0, 32, 32, 8, 8);
+        let det = VideoDetection {
+            mark: MarkKind::Diamond,
+            x: 8,
+            y: 8,
+            w: 8,
+            h: 8,
+            score: 1.0,
+        };
+        let picked = pick_alpha_by_silhouette(&[img], 32, 32, &det, &map, 0.90);
+        assert!((picked - 1.0).abs() <= 0.02, "expected ~1.0, got {picked}");
+    }
+
+    #[test]
+    fn pick_discards_scale_that_digs_dark_hole() {
+        let mut map = diamond_map_8();
+        // Peak 0.35 on this 8×8 diamond only drops mean hi-α luma 4.56 at 1.12
+        // (measured), under HOLE_LUMA_THR. Lift peak so 1.12 holes and 1.0 does not.
+        for a in &mut map.alpha {
+            *a = (*a * 1.5).min(1.0);
+        }
+        let img = blend_on_canvas(60, &map, 1.0, 32, 32, 8, 8);
+        let det = VideoDetection {
+            mark: MarkKind::Diamond,
+            x: 8,
+            y: 8,
+            w: 8,
+            h: 8,
+            score: 1.0,
+        };
+        // 1.12 over-subtracts white-on-60 enough to drop hi-α luma > 6 below ring.
+        assert!(
+            scale_digs_hole(&img, 32, 32, &det, &map, 1.12),
+            "1.12 should be classified as a hole on this synthetic"
+        );
+        assert!(!scale_digs_hole(&img, 32, 32, &det, &map, 1.0));
+        let picked = pick_alpha_by_silhouette(&[img], 32, 32, &det, &map, 1.0);
+        assert!(
+            picked <= 1.05 + 1e-3,
+            "must not pick hole scale 1.12, got {picked}"
+        );
+    }
+
+    #[test]
+    fn pick_returns_seed_when_every_trial_is_a_hole() {
+        let map = diamond_map_8();
+        // Already-dark ROI: any reverse-blend of white stays a hole vs a bright ring.
+        // Build 32×32 at bg 8 with a bright 4px exterior (200) and a blended diamond
+        // in the center so hi-α after any trial stays << ring - 6.
+        let mut img = vec![8u8; 32 * 32 * 4];
+        for i in 0..32 * 32 {
+            img[i * 4 + 3] = 255;
+        }
+        for y in 0..32u32 {
+            for x in 0..32u32 {
+                let border = x < 2 || y < 2 || x >= 30 || y >= 30;
+                if border {
+                    let o = ((y * 32 + x) * 4) as usize;
+                    img[o] = 200;
+                    img[o + 1] = 200;
+                    img[o + 2] = 200;
+                }
+            }
+        }
+        let det = VideoDetection {
+            mark: MarkKind::Diamond,
+            x: 8,
+            y: 8,
+            w: 8,
+            h: 8,
+            score: 1.0,
+        };
+        let seed = 0.83f32;
+        let picked = pick_alpha_by_silhouette(&[img], 32, 32, &det, &map, seed);
+        assert!(
+            (picked - seed).abs() < 1e-5,
+            "all-hole fallback must return seed {seed}, got {picked}"
+        );
     }
 }
