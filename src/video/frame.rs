@@ -1,9 +1,8 @@
 //! Per-frame reverse-blend using a VideoMap + intensity scale.
 //!
-//! After reverse-blend, cleanup targets the **full α footprint** (GWT video
-//! marks all map pixels as denoise edges — 48×48 = 2304), not only the
-//! high-`|∇α|` silhouette ring: exterior-preferring seed + Jacobi fill,
-//! alpha-ramped mix, then exterior HF grain reinjection. Classical only.
+//! After reverse-blend, residual fill is opaque-unrecoverable pixels first;
+//! a thin high-`|∇α|` ring is mixed in only when silhouette survival stays
+//! high. No full-footprint TELEA. Classical only.
 
 use crate::blend::reverse_alpha_blend;
 use crate::WatermarkTemplate;
@@ -20,14 +19,12 @@ const EDGE_ALPHA_EPS: f32 = 0.008;
 /// `|∇α|` threshold for the silhouette ring (central-difference magnitude).
 const EDGE_GRAD_THR: f32 = 0.022;
 
-/// Binary dilate iterations on the edge mask (expands ~1px into near-edge band).
-const EDGE_DILATE: usize = 3;
-
-/// Full-footprint mask: α above this is filled (GWT denoise covers all map px).
-const FOOT_ALPHA_THR: f32 = 0.015;
-
-/// Dilate iterations on the full footprint mask.
-const FOOT_DILATE: usize = 2;
+/// Run the thin ring only when reverse-blend leaves this much silhouette energy.
+const RING_SURVIVAL_THR: f64 = 0.40;
+/// Mix of TELEA fill vs reverse-blend on the ring (no hard mix / α ramp).
+const RING_MIX: f32 = 0.40;
+/// Binary dilate iterations on the `|∇α|` ring.
+const RING_DILATE: usize = 1;
 
 /// Gaussian seed radius / sigma for filling from known (non-mask) pixels.
 #[allow(dead_code)]
@@ -46,13 +43,6 @@ const EDGE_SEED_BLEND: f32 = 0.50;
 /// Mild Gaussian on the mask after Jacobi (radius / sigma).
 const EDGE_RING_GAUSS_RADIUS: i32 = 2;
 const EDGE_RING_GAUSS_SIGMA: f32 = 1.4;
-
-/// Alpha-ramped mix of filled vs reverse-blend (higher → more fill).
-const RESID_STRENGTH: f32 = 0.92;
-const RESID_ALPHA_RAMP: f32 = 0.12;
-
-/// Hard mask mix toward filled (in addition to alpha ramp).
-const FOOT_HARD_MIX: f32 = 0.90;
 
 /// Exterior HF grain reinjection strength inside the footprint.
 const GRAIN_STRENGTH: f32 = 0.85;
@@ -91,8 +81,8 @@ pub fn map_to_template(map: &VideoMap, alpha_scale: f32) -> WatermarkTemplate {
     }
 }
 
-/// Reverse-blend the watermark ROI on one RGBA frame, then full-footprint
-/// residual cleanup (exterior-guided fill + grain).
+/// Reverse-blend the watermark ROI on one RGBA frame, then residual cleanup
+/// (opaque TELEA; optional thin `|∇α|` ring).
 ///
 /// Scales `map.alpha` by `alpha_scale`, builds a template (logo RGB or white),
 /// and calls [`reverse_alpha_blend`] at `(det.x, det.y)`.
@@ -140,77 +130,161 @@ fn remove_on_frame_with_options(
         return;
     }
     let tpl = map_to_template(map, alpha_scale);
-    let _mask = reverse_alpha_blend(
-        w,
-        h,
-        rgba,
-        &tpl,
-        det.x as i32,
-        det.y as i32,
-        OPAQUE_CUTOFF,
-    );
+    let before_energy = roi_sil_energy(rgba, w, h, det, map);
+    let mask = reverse_alpha_blend(w, h, rgba, &tpl, det.x as i32, det.y as i32, OPAQUE_CUTOFF);
     if do_edge_cleanup {
-        edge_ring_cleanup(rgba, w, h, det, map);
+        residual_cleanup(rgba, w, h, det, map, &mask, before_energy);
     }
 }
 
+/// `|∇α|`-weighted RGB edge energy inside the detection ROI.
+/// Duplicated from `alpha::roi_edge_energy`; not shared across modules.
+fn roi_sil_energy(frame: &[u8], w: u32, h: u32, det: &VideoDetection, map: &VideoMap) -> f32 {
+    let mw = map.width as usize;
+    let mh = map.height as usize;
+    if mw < 3 || mh < 3 {
+        return 0.0;
+    }
+    let stride = w as usize;
+    let mut energy = 0.0f32;
+    let mut weight = 0.0f32;
+    for py in 1..mh - 1 {
+        for px in 1..mw - 1 {
+            let ax = map.alpha[py * mw + px + 1] - map.alpha[py * mw + px - 1];
+            let ay = map.alpha[(py + 1) * mw + px] - map.alpha[(py - 1) * mw + px];
+            let wt = (ax * ax + ay * ay).sqrt();
+            if wt < 0.02 {
+                continue;
+            }
+            let fx = det.x as usize + px;
+            let fy = det.y as usize + py;
+            if fx == 0 || fy == 0 || fx + 1 >= w as usize || fy + 1 >= h as usize {
+                continue;
+            }
+            let i = (fy * stride + fx) * 4;
+            let mut g = 0.0f32;
+            for c in 0..3 {
+                let gx = frame[i + 4 + c] as f32 - frame[i - 4 + c] as f32;
+                let gy = frame[i + stride * 4 + c] as f32 - frame[i - stride * 4 + c] as f32;
+                g += gx * gx + gy * gy;
+            }
+            energy += g * wt;
+            weight += wt;
+        }
+    }
+    if weight > 0.0 {
+        energy / weight
+    } else {
+        0.0
+    }
+}
 
-/// Soften residual diamond after reverse-blend via full-footprint fill.
+/// Soften leftover mark after reverse-blend: opaque fill, then optional ring.
 ///
-/// 1. Mask = high-`|∇α|` ring ∪ dilated α footprint (GWT denoise = all map px).
-/// 2. Exterior-preferring Gaussian seed, Jacobi, seed blend, mild blur.
-/// 3. Alpha-ramped mix toward fill; reinject exterior HF grain.
-fn edge_ring_cleanup(
+/// 1. TELEA on reverse-blend opaque mask pixels (`α_template >= 0.95`).
+/// 2. If silhouette survival > 0.40, TELEA a dilate-1 `|∇α|` ring at mix 0.40.
+/// 3. Grain only on that ring. No full-footprint union.
+fn residual_cleanup(
     rgba: &mut [u8],
     w: u32,
     h: u32,
     det: &VideoDetection,
     map: &VideoMap,
+    mask: &[u8],
+    before_energy: f32,
 ) {
     let mw = map.width as usize;
     let mh = map.height as usize;
     if mw == 0 || mh == 0 {
         return;
     }
-    let grad = alpha_grad_mag(&map.alpha, mw, mh);
-    let mut mask = vec![false; mw * mh];
-    for i in 0..mw * mh {
-        if map.alpha[i] >= EDGE_ALPHA_EPS && grad[i] > EDGE_GRAD_THR {
-            mask[i] = true;
+    let img_w = w as usize;
+    let mut roi = vec![0f32; mw * mh * 3];
+    copy_rgba_to_roi(rgba, w, h, det, mw, mh, &mut roi);
+
+    let mut telea_mask = vec![false; mw * mh];
+    if mask.len() == img_w.saturating_mul(h as usize) {
+        for py in 0..mh {
+            for px in 0..mw {
+                let fx = det.x as usize + px;
+                let fy = det.y as usize + py;
+                if fx >= w as usize || fy >= h as usize {
+                    continue;
+                }
+                if mask[fy * img_w + fx] != 0 {
+                    telea_mask[py * mw + px] = true;
+                }
+            }
         }
     }
-    for _ in 0..EDGE_DILATE {
-        dilate_mask_3x3(&mut mask, mw, mh);
+    if telea_mask.iter().any(|&m| m) {
+        let radius = if mw <= 48 { 5 } else { 7 };
+        inpaint_telea(&mut roi, &telea_mask, mw, mh, radius);
+        write_roi_mask_to_rgba(rgba, w, h, det, mw, mh, &roi, &telea_mask);
     }
-    let mut foot = vec![false; mw * mh];
-    for i in 0..mw * mh {
-        if map.alpha[i] > FOOT_ALPHA_THR {
-            foot[i] = true;
-        }
-    }
-    for _ in 0..FOOT_DILATE {
-        dilate_mask_3x3(&mut foot, mw, mh);
-    }
-    for i in 0..mw * mh {
-        mask[i] = mask[i] || foot[i];
-    }
-    let mut support = vec![false; mw * mh];
-    for i in 0..mw * mh {
-        if map.alpha[i] > 0.008 {
-            support[i] = true;
-        }
-    }
-    dilate_mask_3x3(&mut support, mw, mh);
-    dilate_mask_3x3(&mut support, mw, mh);
-    for i in 0..mw * mh {
-        mask[i] = mask[i] && support[i];
-    }
-    if !mask.iter().any(|&m| m) {
+
+    let survival = if before_energy < 1e-6 {
+        0.0
+    } else {
+        let after = roi_sil_energy(rgba, w, h, det, map);
+        after / before_energy
+    };
+    if (survival as f64) <= RING_SURVIVAL_THR {
         return;
     }
 
+    let grad = alpha_grad_mag(&map.alpha, mw, mh);
+    let mut ring = vec![false; mw * mh];
+    for i in 0..mw * mh {
+        if map.alpha[i] >= EDGE_ALPHA_EPS && grad[i] > EDGE_GRAD_THR {
+            ring[i] = true;
+        }
+    }
+    for _ in 0..RING_DILATE {
+        dilate_mask_3x3(&mut ring, mw, mh);
+    }
+    if !ring.iter().any(|&m| m) {
+        return;
+    }
+
+    copy_rgba_to_roi(rgba, w, h, det, mw, mh, &mut roi);
+    let blended = roi.clone();
+    let radius = if mw <= 48 { 5 } else { 7 };
+    inpaint_telea(&mut roi, &ring, mw, mh, radius);
+    gaussian_masked(
+        &mut roi,
+        &ring,
+        mw,
+        mh,
+        EDGE_RING_GAUSS_RADIUS,
+        EDGE_RING_GAUSS_SIGMA,
+    );
+
+    let mix = RING_MIX.clamp(0.0, 1.0);
+    for i in 0..mw * mh {
+        if !ring[i] {
+            continue;
+        }
+        let o = i * 3;
+        for c in 0..3 {
+            roi[o + c] = roi[o + c] * mix + blended[o + c] * (1.0 - mix);
+        }
+    }
+
+    reinject_exterior_grain(&mut roi, &blended, &ring, &map.alpha, mw, mh);
+    write_roi_mask_to_rgba(rgba, w, h, det, mw, mh, &roi, &ring);
+}
+
+fn copy_rgba_to_roi(
+    rgba: &[u8],
+    w: u32,
+    h: u32,
+    det: &VideoDetection,
+    mw: usize,
+    mh: usize,
+    roi: &mut [f32],
+) {
     let stride = w as usize;
-    let mut roi = vec![0f32; mw * mh * 3];
     for py in 0..mh {
         for px in 0..mw {
             let fx = det.x as usize + px;
@@ -225,45 +299,23 @@ fn edge_ring_cleanup(
             roi[ro + 2] = rgba[oi + 2] as f32;
         }
     }
+}
 
-    let blended = roi.clone();
-    // Onion-peel Telea-ish fill over the full footprint (python OpenCV TELEA
-    // fill; FDnCNN feature uses in-process ncnn when enabled).
-    let radius = if mw <= 48 { 5 } else { 7 };
-    inpaint_telea(&mut roi, &mask, mw, mh, radius);
-    gaussian_masked(
-        &mut roi,
-        &mask,
-        mw,
-        mh,
-        EDGE_RING_GAUSS_RADIUS,
-        EDGE_RING_GAUSS_SIGMA,
-    );
-
-    let strength = RESID_STRENGTH.clamp(0.0, 1.0);
-    let ramp = RESID_ALPHA_RAMP.max(1e-4);
-    let hard = FOOT_HARD_MIX.clamp(0.0, 1.0);
-    for i in 0..mw * mh {
-        let a = map.alpha[i].clamp(0.0, 1.0);
-        let mut w_mix = strength * (a / ramp).clamp(0.0, 1.0);
-        if mask[i] {
-            w_mix = w_mix.max(hard * strength);
-        }
-        if w_mix <= 1e-6 {
-            continue;
-        }
-        let o = i * 3;
-        for c in 0..3 {
-            roi[o + c] = roi[o + c] * w_mix + blended[o + c] * (1.0 - w_mix);
-        }
-    }
-
-    reinject_exterior_grain(&mut roi, &blended, &mask, &map.alpha, mw, mh);
-
+fn write_roi_mask_to_rgba(
+    rgba: &mut [u8],
+    w: u32,
+    h: u32,
+    det: &VideoDetection,
+    mw: usize,
+    mh: usize,
+    roi: &[f32],
+    keep: &[bool],
+) {
+    let stride = w as usize;
     for py in 0..mh {
         for px in 0..mw {
             let i = py * mw + px;
-            if !mask[i] && map.alpha[i] <= FOOT_ALPHA_THR {
+            if !keep[i] {
                 continue;
             }
             let fx = det.x as usize + px;
@@ -279,7 +331,6 @@ fn edge_ring_cleanup(
         }
     }
 }
-
 
 /// Replace mask pixels with Gaussian-weighted RGB from nearby non-mask pixels.
 /// Prefer low-α / exterior neighbors when available.
@@ -428,7 +479,6 @@ fn jacobi_ring_step(roi: &mut [f32], mask: &[bool], mw: usize, mh: usize) {
     }
 }
 
-
 /// Mild Gaussian blur applied only on `mask` pixels (neighbors may be outside).
 fn gaussian_masked(roi: &mut [f32], mask: &[bool], mw: usize, mh: usize, rad: i32, sigma: f32) {
     if rad <= 0 || sigma <= 0.0 {
@@ -468,7 +518,6 @@ fn gaussian_masked(roi: &mut [f32], mask: &[bool], mw: usize, mh: usize, rad: i3
         }
     }
 }
-
 
 /// Reinject exterior high-frequency grain into mask pixels so a strong
 /// footprint fill does not go plastic-smooth vs GWT/FDnCNN fabric grain.
@@ -514,7 +563,10 @@ fn reinject_exterior_grain(
     let mut target_std = [0f32; 3];
     for c in 0..3 {
         let mean = ext_sum[c] / ext_n;
-        target_std[c] = ((ext_sq[c] / ext_n) - mean * mean).max(0.0).sqrt().max(1e-3);
+        target_std[c] = ((ext_sq[c] / ext_n) - mean * mean)
+            .max(0.0)
+            .sqrt()
+            .max(1e-3);
     }
 
     let mut synth = noise.clone();
@@ -796,8 +848,10 @@ mod tests {
             h,
             score: 1.0,
         };
-        // Blend-only first, then paint a dark silhouette on high-grad pixels.
+        // Blend-only first; snapshot energy on the blended-clean ROI, then paint
+        // a dark silhouette so residual survival stays above the ring threshold.
         remove_on_frame_blend_only(&mut canvas, cw, ch, &det, &map, 1.0);
+        let before_energy = roi_sil_energy(&canvas, cw, ch, &det, &map).max(1.0);
         let grad = alpha_grad_mag(&map.alpha, 8, 8);
         let mut before_contrast = 0.0f32;
         let mut n = 0u32;
@@ -816,7 +870,8 @@ mod tests {
             }
         }
         assert!(n > 4, "expected an edge ring to paint, got {n}");
-        edge_ring_cleanup(&mut canvas, cw, ch, &det, &map);
+        let rb_mask = vec![0u8; (cw * ch) as usize];
+        residual_cleanup(&mut canvas, cw, ch, &det, &map, &rb_mask, before_energy);
         let mut after_contrast = 0.0f32;
         for py in 0..8usize {
             for px in 0..8usize {
@@ -829,9 +884,117 @@ mod tests {
             }
         }
         assert!(
-            after_contrast < before_contrast * 0.55,
+            after_contrast < before_contrast * 0.80,
             "edge cleanup should cut silhouette contrast: before={before_contrast} after={after_contrast}"
         );
     }
 
+    fn checker_canvas(cw: u32, ch: u32) -> Vec<u8> {
+        let mut data = vec![0u8; (cw * ch * 4) as usize];
+        for y in 0..ch {
+            for x in 0..cw {
+                let on = ((x / 2) + (y / 2)) % 2 == 0;
+                let v = if on { 40u8 } else { 200u8 };
+                let o = ((y * cw + x) * 4) as usize;
+                data[o] = v;
+                data[o + 1] = v;
+                data[o + 2] = v;
+                data[o + 3] = 255;
+            }
+        }
+        data
+    }
+
+    fn rgb_std(
+        rgba: &[u8],
+        cw: u32,
+        ox: u32,
+        oy: u32,
+        mw: usize,
+        mh: usize,
+        keep: impl Fn(usize) -> bool,
+    ) -> f32 {
+        let mut sum = 0.0f32;
+        let mut n = 0.0f32;
+        let mut vals: Vec<f32> = Vec::new();
+        for py in 0..mh {
+            for px in 0..mw {
+                let i = py * mw + px;
+                if !keep(i) {
+                    continue;
+                }
+                let o = (((oy as usize) + py) * cw as usize + (ox as usize) + px) * 4;
+                let l = 0.299 * rgba[o] as f32
+                    + 0.587 * rgba[o + 1] as f32
+                    + 0.114 * rgba[o + 2] as f32;
+                vals.push(l);
+                sum += l;
+                n += 1.0;
+            }
+        }
+        if n < 4.0 {
+            return 0.0;
+        }
+        let mean = sum / n;
+        let var = vals.iter().map(|v| (v - mean) * (v - mean)).sum::<f32>() / n;
+        var.max(0.0).sqrt()
+    }
+
+    #[test]
+    fn remove_on_frame_preserves_checker_texture() {
+        let map = {
+            let mut alpha = vec![0.0f32; 64];
+            for y in 0..8 {
+                for x in 0..8 {
+                    let dx = (x as i32 - 3).abs() + (y as i32 - 3).abs();
+                    if dx <= 3 {
+                        alpha[(y * 8 + x) as usize] = 0.35 * (1.0 - dx as f32 / 4.0);
+                    }
+                }
+            }
+            VideoMap {
+                width: 8,
+                height: 8,
+                alpha: alpha.clone(),
+                rgb: None,
+            }
+        };
+        let cw = 16u32;
+        let ch = 16u32;
+        let ox = 4u32;
+        let oy = 4u32;
+        let mut canvas = checker_canvas(cw, ch);
+        for py in 0..8usize {
+            for px in 0..8usize {
+                let a = map.alpha[py * 8 + px] as f64;
+                if a <= 0.0 {
+                    continue;
+                }
+                let dst = (((oy as usize) + py) * cw as usize + (ox as usize) + px) * 4;
+                for c in 0..3 {
+                    canvas[dst + c] =
+                        (a * 255.0 + (1.0 - a) * canvas[dst + c] as f64).round() as u8;
+                }
+            }
+        }
+        let det = VideoDetection {
+            mark: MarkKind::Diamond,
+            x: ox,
+            y: oy,
+            w: 8,
+            h: 8,
+            score: 1.0,
+        };
+        remove_on_frame(&mut canvas, cw, ch, &det, &map, 1.0);
+        let inner = rgb_std(&canvas, cw, ox, oy, 8, 8, |i| map.alpha[i] > 0.05);
+        let outer = rgb_std(&canvas, cw, ox, oy, 8, 8, |i| map.alpha[i] < 0.02);
+        assert!(
+            outer > 20.0,
+            "checker exterior should stay high-contrast, std={outer}"
+        );
+        assert!(
+            inner >= 0.50 * outer,
+            "footprint std {inner} collapsed vs exterior {outer} (smear)"
+        );
+    }
 }
