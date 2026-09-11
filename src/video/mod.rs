@@ -6,20 +6,24 @@
 mod alpha;
 mod detect;
 mod error;
-mod frame;
-mod maps;
-mod pipeline;
-mod telea;
-#[cfg(feature = "video-fdncnn")]
-mod ncnn_ffi;
 #[cfg(feature = "video-fdncnn")]
 mod fdncnn;
+mod frame;
+mod maps;
+#[cfg(feature = "video-fdncnn")]
+mod ncnn_ffi;
+mod pipeline;
+mod telea;
 
-pub use alpha::{estimate_alpha, refine_alpha_bisection, FRAME_ALPHA_CAP};
+pub use alpha::{
+    estimate_alpha, pick_alpha_by_silhouette, refine_alpha_bisection, FRAME_ALPHA_CAP,
+};
 pub use detect::{detect_from_probe_frames, detect_on_frame, VideoDetection};
 pub use error::{Result, VideoError};
 pub use frame::{map_to_template, remove_on_frame};
-pub use maps::{diamond_map_1080p_standard, diamond_map_720p_compact, diamond_map_720p_standard, VideoMap};
+pub use maps::{
+    diamond_map_1080p_standard, diamond_map_720p_compact, diamond_map_720p_standard, VideoMap,
+};
 pub use pipeline::{ffmpeg_available, remove_video};
 
 /// Which watermark family to look for / remove.
