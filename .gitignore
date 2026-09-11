@@ -1,6 +1,7 @@
 /target
 .DS_Store
 .superpowers/
+.worktrees/
 # ncnn source / cmake fallback and official prebuilt zips (never commit)
 third_party/ncnn-src/
 third_party/ncnn-prebuilt/

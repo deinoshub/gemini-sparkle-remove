@@ -16,7 +16,7 @@ use std::thread;
 
 use rayon::prelude::*;
 
-use super::alpha::refine_alpha_bisection;
+use super::alpha::{pick_alpha_by_silhouette, refine_alpha_bisection};
 use super::detect::{detect_from_probe_frames, VideoDetection};
 #[cfg(not(feature = "video-fdncnn"))]
 use super::frame::remove_on_frame;
@@ -80,22 +80,23 @@ pub fn remove_video(
     let map = select_map(&det, opts)?;
 
     // Phase 1: alpha intensity.
-    // GWT video locks a per-shot constant ("seed-only") after dynamic seed;
-    // we mirror that by refining on evenly spaced probe frames and taking the
-    // median, then applying one scale to every frame (no per-frame flicker).
-    let alpha_scale = if let Some(forced) = opts.force_alpha {
-        forced.clamp(0.05, 2.0)
-    } else {
-        seed_alpha_locked(&frames, probe.width, probe.height, &det, &map)
-    };
+    // Seed-lock a per-shot constant, then silhouette-pick among
+    // {seed, 1.0, 1.05, 1.12} unless force_alpha is set.
+    let (alpha_scale, seed) = resolve_alpha_scale(
+        &frames,
+        probe.width,
+        probe.height,
+        &det,
+        &map,
+        opts.force_alpha,
+    );
     eprintln!(
-        "seed_alpha_locked scale={:.4} region=({},{},{},{})",
-        alpha_scale, det.x, det.y, det.w, det.h
+        "alpha_scale={:.4} seed={:.4} region=({},{},{},{})",
+        alpha_scale, seed, det.x, det.y, det.w, det.h
     );
 
-    // Phase 2: reverse-blend (+ classical footprint fill only when FDnCNN is
-    // unavailable). With `video-fdncnn`, GWT semantics are blend → FDnCNN; a
-    // pre-denoise TELEA fill destroys under-mark texture and yields plastic ROI.
+    // Phase 2: reverse-blend. Residual is opaque fill + optional thin ring
+    // inside `remove_on_frame`. FDnCNN still blend-only then denoise.
     let width = probe.width;
     let height = probe.height;
     frames.par_iter_mut().for_each(|rgba| {
@@ -113,8 +114,8 @@ pub fn remove_video(
     }
 
     // Residual cleanup: with `video-fdncnn`, in-process NcnnDenoiser only
-    // (GWT video is blend→AI; classical TELEA already ran inside remove_on_frame
-    // when FDnCNN is disabled).
+    // (GWT video is blend→AI; opaque + optional thin ring already ran inside
+    // remove_on_frame when FDnCNN is disabled).
     #[cfg(feature = "video-fdncnn")]
     {
         if !fdncnn_postpass_raw(&mut frames, probe.width, probe.height, &det, &map) {
@@ -134,6 +135,23 @@ pub fn remove_video(
     })
 }
 
+
+fn resolve_alpha_scale(
+    frames: &[Vec<u8>],
+    width: u32,
+    height: u32,
+    det: &VideoDetection,
+    map: &VideoMap,
+    force_alpha: Option<f32>,
+) -> (f32 /*picked*/, f32 /*seed*/) {
+    if let Some(forced) = force_alpha {
+        let s = forced.clamp(0.05, 2.0);
+        return (s, s);
+    }
+    let seed = seed_alpha_locked(frames, width, height, det, map);
+    let picked = pick_alpha_by_silhouette(frames, width, height, det, map, seed);
+    (picked, seed)
+}
 
 /// GWT-style per-shot constant alpha: refine on a few evenly spaced frames,
 /// return the median (stable across the clip).
@@ -929,5 +947,86 @@ mod tests {
         encode_frames_raw(&frames, &src, &out, &probe).expect("encode");
         let got = count_video_frames(&out).expect("count");
         assert_eq!(got, n, "expected {n} video frames, got {got}");
+    }
+
+    fn tiny_diamond_frame() -> (Vec<u8>, VideoMap, VideoDetection) {
+        let mut alpha = vec![0.0f32; 64];
+        for y in 0..8 {
+            for x in 0..8 {
+                let dx = (x as i32 - 3).abs() + (y as i32 - 3).abs();
+                if dx <= 3 {
+                    alpha[(y * 8 + x) as usize] = 0.35 * (1.0 - dx as f32 / 4.0);
+                }
+            }
+        }
+        let map = VideoMap {
+            width: 8,
+            height: 8,
+            alpha,
+            rgb: None,
+        };
+        let mut img = vec![60u8; 32 * 32 * 4];
+        for i in 0..32 * 32 {
+            img[i * 4 + 3] = 255;
+        }
+        for py in 0..8usize {
+            for px in 0..8usize {
+                let a = (map.alpha[py * 8 + px] * 1.0).clamp(0.0, 1.0) as f64;
+                let o = ((8 + py) * 32 + (8 + px)) * 4;
+                img[o] = (a * 255.0 + (1.0 - a) * 60.0).round() as u8;
+                img[o + 1] = img[o];
+                img[o + 2] = img[o];
+            }
+        }
+        let det = VideoDetection {
+            mark: MarkKind::Diamond,
+            x: 8,
+            y: 8,
+            w: 8,
+            h: 8,
+            score: 1.0,
+        };
+        (img, map, det)
+    }
+
+    #[test]
+    fn force_alpha_bypasses_silhouette_pick() {
+        // Under-locked synthetic: pick would move seed toward 1.0, force must stick.
+        let (img, map, det) = tiny_diamond_frame();
+        let (picked, seed) = resolve_alpha_scale(&[img], 32, 32, &det, &map, Some(0.55));
+        assert!((picked - 0.55).abs() < 1e-5, "force must win, got {picked}");
+        assert!((seed - 0.55).abs() < 1e-5);
+    }
+
+    #[test]
+    fn resolve_picks_near_true_scale_when_seed_under_locked() {
+        // Same canvas as force test, no force_alpha.
+        let (img, map, det) = tiny_diamond_frame();
+        let frames = [img];
+        let (picked, seed) = resolve_alpha_scale(&frames, 32, 32, &det, &map, None);
+        let no_pick = seed;
+        let via_pick = pick_alpha_by_silhouette(&frames, 32, 32, &det, &map, seed);
+        // seed_alpha_locked damps toward SCALE_NOMINAL≈0.96 (never <0.94: under
+        // 0.95 is lifted to 1.0). Pick must still move that seed toward 1.0.
+        assert!(
+            seed < 0.98,
+            "seed should sit under true 1.0, got {seed}"
+        );
+        assert!(
+            (picked - no_pick).abs() > 1e-3,
+            "pick must move off seed; unwired resolve would return picked=seed={seed}"
+        );
+        assert!(
+            (picked - via_pick).abs() < 1e-5,
+            "resolve must return silhouette pick ({via_pick}), got {picked} seed={seed}"
+        );
+        assert!(
+            (picked - 1.0).abs() < (seed - 1.0).abs(),
+            "picked {picked} should be closer to 1.0 than seed {seed}"
+        );
+        assert!(
+            picked >= 0.96 && picked <= 1.05,
+            "pick should lift under-seed toward 1.0, seed={seed} picked={picked}"
+        );
     }
 }
