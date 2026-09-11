@@ -1002,8 +1002,28 @@ mod tests {
     fn resolve_picks_near_true_scale_when_seed_under_locked() {
         // Same canvas as force test, no force_alpha.
         let (img, map, det) = tiny_diamond_frame();
-        let (picked, seed) = resolve_alpha_scale(&[img], 32, 32, &det, &map, None);
-        assert!(seed <= 1.0);
+        let frames = [img];
+        let (picked, seed) = resolve_alpha_scale(&frames, 32, 32, &det, &map, None);
+        let no_pick = seed;
+        let via_pick = pick_alpha_by_silhouette(&frames, 32, 32, &det, &map, seed);
+        // seed_alpha_locked damps toward SCALE_NOMINAL≈0.96 (never <0.94: under
+        // 0.95 is lifted to 1.0). Pick must still move that seed toward 1.0.
+        assert!(
+            seed < 0.98,
+            "seed should sit under true 1.0, got {seed}"
+        );
+        assert!(
+            (picked - no_pick).abs() > 1e-3,
+            "pick must move off seed; unwired resolve would return picked=seed={seed}"
+        );
+        assert!(
+            (picked - via_pick).abs() < 1e-5,
+            "resolve must return silhouette pick ({via_pick}), got {picked} seed={seed}"
+        );
+        assert!(
+            (picked - 1.0).abs() < (seed - 1.0).abs(),
+            "picked {picked} should be closer to 1.0 than seed {seed}"
+        );
         assert!(
             picked >= 0.96 && picked <= 1.05,
             "pick should lift under-seed toward 1.0, seed={seed} picked={picked}"

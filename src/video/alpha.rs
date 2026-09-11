@@ -621,6 +621,35 @@ mod tests {
     }
 
     #[test]
+    fn stock_diamond_map_8_does_not_hole_at_pick_ceiling() {
+        let map = diamond_map_8();
+        let img = blend_on_canvas(60, &map, 1.0, 32, 32, 8, 8);
+        let det = VideoDetection {
+            mark: MarkKind::Diamond,
+            x: 8,
+            y: 8,
+            w: 8,
+            h: 8,
+            score: 1.0,
+        };
+        // Production HOLE_LUMA_THR=6.0 and trial 1.12 stay. Peak α≈0.35 on this
+        // 8×8 map only drops mean hi-α luma ~4.56 below the α<0.02 ring at 1.12
+        // (white-on-60 reverse-blend), so the ceiling does not trip here.
+        let mut after = img.clone();
+        remove_on_frame_blend_only(&mut after, 32, 32, &det, &map, 1.12);
+        let (hi, lo) = hi_lo_luma(&after, 32, 32, &det, &map);
+        let drop = lo - hi;
+        assert!(
+            drop > 4.0 && drop < HOLE_LUMA_THR,
+            "stock peak≈0.35 at 1.12 should drop ~4.56 luma, got hi={hi} lo={lo} drop={drop}"
+        );
+        assert!(
+            !scale_digs_hole(&img, 32, 32, &det, &map, 1.12),
+            "1.12 must not hole-reject unscaled diamond_map_8 (drop={drop} < {HOLE_LUMA_THR})"
+        );
+    }
+
+    #[test]
     fn pick_discards_scale_that_digs_dark_hole() {
         let mut map = diamond_map_8();
         // Peak 0.35 on this 8×8 diamond only drops mean hi-α luma 4.56 at 1.12
@@ -653,21 +682,26 @@ mod tests {
     #[test]
     fn pick_returns_seed_when_every_trial_is_a_hole() {
         let map = diamond_map_8();
-        // Already-dark ROI: any reverse-blend of white stays a hole vs a bright ring.
-        // Build 32×32 at bg 8 with a bright 4px exterior (200) and a blended diamond
-        // in the center so hi-α after any trial stays << ring - 6.
-        let mut img = vec![8u8; 32 * 32 * 4];
+        // Bright low-α ring *inside* the 8×8 map (not the image border outside
+        // the ROI). Dark hi-α interior: any reverse-blend of white stays >6
+        // luma below that in-map ring, so hole reject — not surv_n<1 — discards
+        // every trial.
+        let mut img = vec![40u8; 32 * 32 * 4];
         for i in 0..32 * 32 {
             img[i * 4 + 3] = 255;
         }
-        for y in 0..32u32 {
-            for x in 0..32u32 {
-                let border = x < 2 || y < 2 || x >= 30 || y >= 30;
-                if border {
-                    let o = ((y * 32 + x) * 4) as usize;
+        for py in 0..8usize {
+            for px in 0..8usize {
+                let a = map.alpha[py * 8 + px];
+                let o = ((8 + py) * 32 + (8 + px)) * 4;
+                if a < 0.02 {
                     img[o] = 200;
                     img[o + 1] = 200;
                     img[o + 2] = 200;
+                } else {
+                    img[o] = 8;
+                    img[o + 1] = 8;
+                    img[o + 2] = 8;
                 }
             }
         }
@@ -680,6 +714,17 @@ mod tests {
             score: 1.0,
         };
         let seed = 0.83f32;
+        for scale in [seed, 1.0, 1.05, 1.12] {
+            assert!(
+                scale_digs_hole(&img, 32, 32, &det, &map, scale),
+                "trial {scale} must hole-reject against the in-map low-α ring"
+            );
+            let surv = roi_silhouette_survival(&img, 32, 32, &det, &map, scale);
+            assert!(
+                surv.is_finite(),
+                "trial {scale} must have silhouette energy (surv={surv}); discard via hole, not surv_n<1"
+            );
+        }
         let picked = pick_alpha_by_silhouette(&[img], 32, 32, &det, &map, seed);
         assert!(
             (picked - seed).abs() < 1e-5,

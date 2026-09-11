@@ -26,21 +26,7 @@ const RING_MIX: f32 = 0.40;
 /// Binary dilate iterations on the `|∇α|` ring.
 const RING_DILATE: usize = 1;
 
-/// Gaussian seed radius / sigma for filling from known (non-mask) pixels.
-#[allow(dead_code)]
-const EDGE_SEED_RADIUS: i32 = 7;
-#[allow(dead_code)]
-const EDGE_SEED_SIGMA: f32 = 2.8;
-
-/// Jacobi diffusion iterations after seeding.
-#[allow(dead_code)]
-const EDGE_JACOBI_ITERS: usize = 36;
-
-/// Blend filled result toward the Gaussian seed (reduces Jacobi ripple).
-#[allow(dead_code)]
-const EDGE_SEED_BLEND: f32 = 0.50;
-
-/// Mild Gaussian on the mask after Jacobi (radius / sigma).
+/// Mild Gaussian on the ring after TELEA (radius / sigma).
 const EDGE_RING_GAUSS_RADIUS: i32 = 2;
 const EDGE_RING_GAUSS_SIGMA: f32 = 1.4;
 
@@ -332,70 +318,6 @@ fn write_roi_mask_to_rgba(
     }
 }
 
-/// Replace mask pixels with Gaussian-weighted RGB from nearby non-mask pixels.
-/// Prefer low-α / exterior neighbors when available.
-#[allow(dead_code)]
-fn seed_from_known_prefer_exterior(
-    roi: &mut [f32],
-    mask: &[bool],
-    alpha: &[f32],
-    mw: usize,
-    mh: usize,
-) {
-    let src = roi.to_vec();
-    let rad = EDGE_SEED_RADIUS;
-    let sigma = EDGE_SEED_SIGMA;
-    let inv_2s2 = 1.0 / (2.0 * sigma * sigma);
-    for y in 0..mh {
-        for x in 0..mw {
-            let i = y * mw + x;
-            if !mask[i] {
-                continue;
-            }
-            let mut acc = [0f32; 3];
-            let mut wsum = 0f32;
-            let mut acc_any = [0f32; 3];
-            let mut wsum_any = 0f32;
-            for dy in -rad..=rad {
-                for dx in -rad..=rad {
-                    let yy = y as i32 + dy;
-                    let xx = x as i32 + dx;
-                    if yy < 0 || xx < 0 || yy as usize >= mh || xx as usize >= mw {
-                        continue;
-                    }
-                    let j = yy as usize * mw + xx as usize;
-                    if mask[j] {
-                        continue;
-                    }
-                    let w = (-((dx * dx + dy * dy) as f32) * inv_2s2).exp();
-                    let o = j * 3;
-                    acc_any[0] += w * src[o];
-                    acc_any[1] += w * src[o + 1];
-                    acc_any[2] += w * src[o + 2];
-                    wsum_any += w;
-                    if alpha[j] >= 0.02 {
-                        continue;
-                    }
-                    acc[0] += w * src[o];
-                    acc[1] += w * src[o + 1];
-                    acc[2] += w * src[o + 2];
-                    wsum += w;
-                }
-            }
-            let o = i * 3;
-            if wsum > 1e-6 {
-                roi[o] = acc[0] / wsum;
-                roi[o + 1] = acc[1] / wsum;
-                roi[o + 2] = acc[2] / wsum;
-            } else if wsum_any > 1e-6 {
-                roi[o] = acc_any[0] / wsum_any;
-                roi[o + 1] = acc_any[1] / wsum_any;
-                roi[o + 2] = acc_any[2] / wsum_any;
-            }
-        }
-    }
-}
-
 fn alpha_grad_mag(alpha: &[f32], mw: usize, mh: usize) -> Vec<f32> {
     let mut g = vec![0f32; mw * mh];
     if mw < 2 || mh < 2 {
@@ -442,39 +364,6 @@ fn dilate_mask_3x3(mask: &mut [bool], mw: usize, mh: usize) {
                 }
             }
             mask[y * mw + x] = on;
-        }
-    }
-}
-
-#[allow(dead_code)]
-fn jacobi_ring_step(roi: &mut [f32], mask: &[bool], mw: usize, mh: usize) {
-    let src = roi.to_vec();
-    for y in 0..mh {
-        for x in 0..mw {
-            let i = y * mw + x;
-            if !mask[i] {
-                continue;
-            }
-            let mut acc = [0f32; 3];
-            let mut n = 0f32;
-            for dy in -1i32..=1 {
-                for dx in -1i32..=1 {
-                    if dy == 0 && dx == 0 {
-                        continue;
-                    }
-                    let yy = (y as i32 + dy).clamp(0, mh as i32 - 1) as usize;
-                    let xx = (x as i32 + dx).clamp(0, mw as i32 - 1) as usize;
-                    let o = (yy * mw + xx) * 3;
-                    acc[0] += src[o];
-                    acc[1] += src[o + 1];
-                    acc[2] += src[o + 2];
-                    n += 1.0;
-                }
-            }
-            let o = i * 3;
-            roi[o] = acc[0] / n;
-            roi[o + 1] = acc[1] / n;
-            roi[o + 2] = acc[2] / n;
         }
     }
 }
@@ -940,6 +829,59 @@ mod tests {
         var.max(0.0).sqrt()
     }
 
+    /// Pre-drop full-footprint TELEA at old `FOOT_HARD_MIX=0.90` /
+    /// `RESID_STRENGTH=0.92`. Test-only; does not restore production FOOT_*.
+    /// No FOOT_DILATE: α<0.02 stays the unsmeared exterior reference.
+    fn old_full_footprint_telea_mix_090_092(
+        rgba: &mut [u8],
+        w: u32,
+        h: u32,
+        det: &VideoDetection,
+        map: &VideoMap,
+        alpha_scale: f32,
+    ) {
+        remove_on_frame_blend_only(rgba, w, h, det, map, alpha_scale);
+        let mw = map.width as usize;
+        let mh = map.height as usize;
+        let mut roi = vec![0f32; mw * mh * 3];
+        copy_rgba_to_roi(rgba, w, h, det, mw, mh, &mut roi);
+        let blended = roi.clone();
+        let mut mask = vec![false; mw * mh];
+        for i in 0..mw * mh {
+            if map.alpha[i] > 0.015 {
+                mask[i] = true;
+            }
+        }
+        if !mask.iter().any(|&m| m) {
+            return;
+        }
+        let radius = if mw <= 48 { 5 } else { 7 };
+        inpaint_telea(&mut roi, &mask, mw, mh, radius);
+        gaussian_masked(
+            &mut roi,
+            &mask,
+            mw,
+            mh,
+            EDGE_RING_GAUSS_RADIUS,
+            EDGE_RING_GAUSS_SIGMA,
+        );
+        let strength = 0.92f32;
+        let hard = 0.90f32;
+        let ramp = 0.12f32;
+        for i in 0..mw * mh {
+            if !mask[i] {
+                continue;
+            }
+            let a = map.alpha[i].clamp(0.0, 1.0);
+            let w_mix = (strength * (a / ramp).clamp(0.0, 1.0)).max(hard * strength);
+            let o = i * 3;
+            for c in 0..3 {
+                roi[o + c] = roi[o + c] * w_mix + blended[o + c] * (1.0 - w_mix);
+            }
+        }
+        write_roi_mask_to_rgba(rgba, w, h, det, mw, mh, &roi, &mask);
+    }
+
     #[test]
     fn remove_on_frame_preserves_checker_texture() {
         let map = {
@@ -963,7 +905,7 @@ mod tests {
         let ch = 16u32;
         let ox = 4u32;
         let oy = 4u32;
-        let mut canvas = checker_canvas(cw, ch);
+        let mut blended = checker_canvas(cw, ch);
         for py in 0..8usize {
             for px in 0..8usize {
                 let a = map.alpha[py * 8 + px] as f64;
@@ -972,8 +914,8 @@ mod tests {
                 }
                 let dst = (((oy as usize) + py) * cw as usize + (ox as usize) + px) * 4;
                 for c in 0..3 {
-                    canvas[dst + c] =
-                        (a * 255.0 + (1.0 - a) * canvas[dst + c] as f64).round() as u8;
+                    blended[dst + c] =
+                        (a * 255.0 + (1.0 - a) * blended[dst + c] as f64).round() as u8;
                 }
             }
         }
@@ -985,6 +927,7 @@ mod tests {
             h: 8,
             score: 1.0,
         };
+        let mut canvas = blended.clone();
         remove_on_frame(&mut canvas, cw, ch, &det, &map, 1.0);
         let inner = rgb_std(&canvas, cw, ox, oy, 8, 8, |i| map.alpha[i] > 0.05);
         let outer = rgb_std(&canvas, cw, ox, oy, 8, 8, |i| map.alpha[i] < 0.02);
@@ -995,6 +938,19 @@ mod tests {
         assert!(
             inner >= 0.50 * outer,
             "footprint std {inner} collapsed vs exterior {outer} (smear)"
+        );
+
+        let mut old = blended;
+        old_full_footprint_telea_mix_090_092(&mut old, cw, ch, &det, &map, 1.0);
+        let old_inner = rgb_std(&old, cw, ox, oy, 8, 8, |i| map.alpha[i] > 0.05);
+        let old_outer = rgb_std(&old, cw, ox, oy, 8, 8, |i| map.alpha[i] < 0.02);
+        assert!(
+            old_outer > 20.0,
+            "old-mix exterior should stay unsmeared, std={old_outer}"
+        );
+        assert!(
+            old_inner < 0.50 * old_outer,
+            "old 0.90/0.92 full-footprint TELEA must fall below the 50% bar (inner={old_inner} outer={old_outer}); new path inner={inner} outer={outer}"
         );
     }
 }
