@@ -27,8 +27,7 @@ const DIAMOND_720P_W: u32 = 48;
 const DIAMOND_720P_H: u32 = 48;
 
 /// Little-endian f32 alpha, row-major 48×48 (values in [0, 1]).
-const DIAMOND_ALPHA_720P: &[u8] =
-    include_bytes!("../../assets/video/diamond_alpha_720p_48x48.f32");
+const DIAMOND_ALPHA_720P: &[u8] = include_bytes!("../../assets/video/diamond_alpha_720p_48x48.f32");
 
 /// Grayscale diamond preview from GWT (48×48×3), alpha-shaped mid-gray.
 /// Kept embedded so the asset stays in the build; **not** used as blend RGB.
@@ -136,7 +135,10 @@ mod tests {
         assert!(m.rgb.is_none(), "standard map must use white overlay");
         assert_eq!(DIAMOND_RGB_PREVIEW_720P.len(), 48 * 48 * 3);
         // Alpha finite and in [0, 1].
-        assert!(m.alpha.iter().all(|a| a.is_finite() && *a >= 0.0 && *a <= 1.0));
+        assert!(m
+            .alpha
+            .iter()
+            .all(|a| a.is_finite() && *a >= 0.0 && *a <= 1.0));
     }
 
     #[test]
@@ -156,6 +158,9 @@ mod tests {
             "expected max alpha in (0.05, 0.95), got {max_a}"
         );
         assert!(m.rgb.is_none(), "1080p map must use white overlay");
-        assert!(m.alpha.iter().all(|a| a.is_finite() && *a >= 0.0 && *a <= 1.0));
+        assert!(m
+            .alpha
+            .iter()
+            .all(|a| a.is_finite() && *a >= 0.0 && *a <= 1.0));
     }
 }

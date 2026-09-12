@@ -35,13 +35,7 @@ const ESTIMATE_WEIGHT: f32 = 0.08;
 /// Fits `observed ≈ s·α·logo + (1 − s·α)·bg` in luma over high-α pixels,
 /// using a local background from low-α / border samples, then damps toward
 /// [`SCALE_NOMINAL`] so textured BR content cannot inflate scale past GWT.
-pub fn estimate_alpha(
-    frame: &[u8],
-    w: u32,
-    h: u32,
-    det: &VideoDetection,
-    map: &VideoMap,
-) -> f32 {
+pub fn estimate_alpha(frame: &[u8], w: u32, h: u32, det: &VideoDetection, map: &VideoMap) -> f32 {
     if !dims_ok(frame, w, h, det, map) {
         return SCALE_NOMINAL;
     }
@@ -103,7 +97,9 @@ pub fn refine_alpha_bisection(
     previous: Option<f32>,
 ) -> f32 {
     if !dims_ok(frame, w, h, det, map) {
-        return previous.unwrap_or(SCALE_NOMINAL).clamp(SCALE_MIN, SCALE_MAX);
+        return previous
+            .unwrap_or(SCALE_NOMINAL)
+            .clamp(SCALE_MIN, SCALE_MAX);
     }
 
     let mut s = estimate_alpha(frame, w, h, det, map);
@@ -389,13 +385,7 @@ fn local_background_luma(
     median_f32(&mut samples).unwrap_or(128.0) as f64
 }
 
-fn exterior_ring_luma(
-    frame: &[u8],
-    w: u32,
-    h: u32,
-    det: &VideoDetection,
-    map: &VideoMap,
-) -> f32 {
+fn exterior_ring_luma(frame: &[u8], w: u32, h: u32, det: &VideoDetection, map: &VideoMap) -> f32 {
     let mut samples = exterior_ring_samples(frame, w, h, det, map);
     median_f32(&mut samples).unwrap_or(128.0)
 }
@@ -415,10 +405,8 @@ fn exterior_ring_samples(
     let y1 = (det.y + map.height + 4).min(h);
     for y in y0..y1 {
         for x in x0..x1 {
-            let inside = x >= det.x
-                && y >= det.y
-                && x < det.x + map.width
-                && y < det.y + map.height;
+            let inside =
+                x >= det.x && y >= det.y && x < det.x + map.width && y < det.y + map.height;
             if inside {
                 continue;
             }
@@ -516,7 +504,15 @@ mod tests {
         }
     }
 
-    fn blend_on_canvas(bg: u8, map: &VideoMap, scale: f32, canvas_w: u32, canvas_h: u32, x: u32, y: u32) -> Vec<u8> {
+    fn blend_on_canvas(
+        bg: u8,
+        map: &VideoMap,
+        scale: f32,
+        canvas_w: u32,
+        canvas_h: u32,
+        x: u32,
+        y: u32,
+    ) -> Vec<u8> {
         let mut img = vec![bg; (canvas_w as usize) * (canvas_h as usize) * 4];
         // set alpha channel
         for i in 0..(canvas_w * canvas_h) as usize {

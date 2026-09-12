@@ -22,7 +22,9 @@ use super::detect::{detect_from_probe_frames, VideoDetection};
 use super::frame::remove_on_frame;
 #[cfg(feature = "video-fdncnn")]
 use super::frame::remove_on_frame_blend_only;
-use super::maps::{diamond_map_1080p_standard, diamond_map_720p_compact, diamond_map_720p_standard, VideoMap};
+use super::maps::{
+    diamond_map_1080p_standard, diamond_map_720p_compact, diamond_map_720p_standard, VideoMap,
+};
 use super::{MarkKind, Result, VideoError, VideoRemoveOptions, VideoRemoveResult};
 
 /// Number of evenly spaced frames used for multi-frame detect probe.
@@ -73,9 +75,8 @@ pub fn remove_video(
     }
 
     let probe_frames = select_probe_frames(&frames, probe.width, probe.height)?;
-    let det = detect_from_probe_frames(&probe_frames).ok_or_else(|| {
-        VideoError::Detect("no watermark detected on probe frames".into())
-    })?;
+    let det = detect_from_probe_frames(&probe_frames)
+        .ok_or_else(|| VideoError::Detect("no watermark detected on probe frames".into()))?;
 
     let map = select_map(&det, opts)?;
 
@@ -119,9 +120,7 @@ pub fn remove_video(
     #[cfg(feature = "video-fdncnn")]
     {
         if !fdncnn_postpass_raw(&mut frames, probe.width, probe.height, &det, &map) {
-            eprintln!(
-                "fdncnn_postpass_rust failed — check assets/video/fdncnn + third_party/ncnn"
-            );
+            eprintln!("fdncnn_postpass_rust failed — check assets/video/fdncnn + third_party/ncnn");
         }
     }
 
@@ -134,7 +133,6 @@ pub fn remove_video(
         region: (det.x, det.y, det.w, det.h),
     })
 }
-
 
 fn resolve_alpha_scale(
     frames: &[Vec<u8>],
@@ -272,7 +270,6 @@ fn ffprobe_bin() -> PathBuf {
     static PATH: OnceLock<PathBuf> = OnceLock::new();
     PATH.get_or_init(|| ffmpeg_tool_path("ffprobe")).clone()
 }
-
 
 fn missing_ffmpeg_hint() -> &'static str {
     #[cfg(feature = "system-ffmpeg")]
@@ -593,12 +590,7 @@ fn encode_frames_raw(
         "0:v:0".into(),
     ];
     if probe.has_audio {
-        args.extend([
-            "-map".into(),
-            "1:a:0".into(),
-            "-c:a".into(),
-            "copy".into(),
-        ]);
+        args.extend(["-map".into(), "1:a:0".into(), "-c:a".into(), "copy".into()]);
     }
     args.extend([
         "-c:v".into(),
@@ -788,10 +780,7 @@ mod tests {
         );
 
         let dur = probe_duration(&output).expect("duration");
-        assert!(
-            (9.5..10.6).contains(&dur),
-            "duration {dur} not ~10s"
-        );
+        assert!((9.5..10.6).contains(&dur), "duration {dur} not ~10s");
 
         // Audio passthrough present.
         let audio = Command::new(ffprobe_bin())
@@ -809,8 +798,7 @@ mod tests {
             .output()
             .expect("ffprobe audio");
         assert!(
-            audio.status.success()
-                && !String::from_utf8_lossy(&audio.stdout).trim().is_empty(),
+            audio.status.success() && !String::from_utf8_lossy(&audio.stdout).trim().is_empty(),
             "output should retain audio"
         );
 
@@ -925,7 +913,9 @@ mod tests {
     #[test]
     fn encode_keeps_all_frames_when_audio_is_shorter() {
         if !ffmpeg_available() {
-            eprintln!("skip encode_keeps_all_frames_when_audio_is_shorter: ffmpeg/ffprobe not available");
+            eprintln!(
+                "skip encode_keeps_all_frames_when_audio_is_shorter: ffmpeg/ffprobe not available"
+            );
             return;
         }
         let dir = tempfile::tempdir().expect("temp");
@@ -1008,10 +998,7 @@ mod tests {
         let via_pick = pick_alpha_by_silhouette(&frames, 32, 32, &det, &map, seed);
         // seed_alpha_locked damps toward SCALE_NOMINAL≈0.96 (never <0.94: under
         // 0.95 is lifted to 1.0). Pick must still move that seed toward 1.0.
-        assert!(
-            seed < 0.98,
-            "seed should sit under true 1.0, got {seed}"
-        );
+        assert!(seed < 0.98, "seed should sit under true 1.0, got {seed}");
         assert!(
             (picked - no_pick).abs() > 1e-3,
             "pick must move off seed; unwired resolve would return picked=seed={seed}"

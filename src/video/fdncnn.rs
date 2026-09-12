@@ -23,9 +23,9 @@ use super::detect::VideoDetection;
 use super::maps::VideoMap;
 use super::ncnn_ffi::{
     gwr_ncnn_configure_fdncnn, ncnn_extractor_create, ncnn_extractor_destroy,
-    ncnn_extractor_extract_index, ncnn_extractor_input_index, ncnn_mat_create_3d,
-    ncnn_mat_destroy, ncnn_mat_get_channel_data, ncnn_net_create, ncnn_net_destroy,
-    ncnn_net_load_model, ncnn_net_load_param_bin, ncnn_net_t, BLOB_INPUT, BLOB_OUTPUT,
+    ncnn_extractor_extract_index, ncnn_extractor_input_index, ncnn_mat_create_3d, ncnn_mat_destroy,
+    ncnn_mat_get_channel_data, ncnn_net_create, ncnn_net_destroy, ncnn_net_load_model,
+    ncnn_net_load_param_bin, ncnn_net_t, BLOB_INPUT, BLOB_OUTPUT,
 };
 
 const SIGMA: f32 = 75.0;
@@ -118,7 +118,13 @@ impl FdncnnNet {
 
     /// RGB uint8 H×W×3 interleaved → denoised RGB float in [0, 255] (no u8 round-trip).
     /// Matches GWT float composite path more closely than quantizing before blend.
-    pub fn run_fdncnn_f32(&self, rgb_u8: &[u8], w: usize, h: usize, sigma: f32) -> Option<Vec<f32>> {
+    pub fn run_fdncnn_f32(
+        &self,
+        rgb_u8: &[u8],
+        w: usize,
+        h: usize,
+        sigma: f32,
+    ) -> Option<Vec<f32>> {
         assert_eq!(rgb_u8.len(), w * h * 3);
         unsafe {
             let mat = ncnn_mat_create_3d(w as i32, h as i32, 4, std::ptr::null_mut());
@@ -182,7 +188,7 @@ impl FdncnnNet {
     }
 
     /// RGB uint8 → denoised RGB uint8 (tests / helpers).
-#[allow(dead_code)]
+    #[allow(dead_code)]
     pub fn run_fdncnn(&self, rgb_u8: &[u8], w: usize, h: usize, sigma: f32) -> Option<Vec<u8>> {
         let den = self.run_fdncnn_f32(rgb_u8, w, h, sigma)?;
         Some(
@@ -221,9 +227,7 @@ fn sobel_mag(alpha: &[f32], w: usize, h: usize) -> Vec<f32> {
     };
     for y in 0..h as i32 {
         for x in 0..w as i32 {
-            let gx = -at(x - 1, y - 1) + at(x + 1, y - 1)
-                - 2.0 * at(x - 1, y)
-                + 2.0 * at(x + 1, y)
+            let gx = -at(x - 1, y - 1) + at(x + 1, y - 1) - 2.0 * at(x - 1, y) + 2.0 * at(x + 1, y)
                 - at(x - 1, y + 1)
                 + at(x + 1, y + 1);
             let gy = -at(x - 1, y - 1) - 2.0 * at(x, y - 1) - at(x + 1, y - 1)
@@ -336,7 +340,10 @@ pub fn footprint_weight(alpha: &[f32], w: usize, h: usize, strength: f32) -> (Ve
         vec![1f32; w * h]
     } else {
         let inv = 1.0 / (mx - mn);
-        let mut gn: Vec<f32> = mag.iter().map(|v| ((v - mn) * inv).max(0.0).sqrt()).collect();
+        let mut gn: Vec<f32> = mag
+            .iter()
+            .map(|v| ((v - mn) * inv).max(0.0).sqrt())
+            .collect();
         gn = dilate_ellipse5(&gn, w, h);
         gaussian_blur(&gn, w, h, 2.0)
     };
@@ -359,7 +366,12 @@ fn cached_weight(map: &VideoMap) -> (Vec<f32>, usize) {
             return (c.weight.clone(), c.active);
         }
     }
-    let (weight, active) = footprint_weight(&map.alpha, map.width as usize, map.height as usize, STRENGTH);
+    let (weight, active) = footprint_weight(
+        &map.alpha,
+        map.width as usize,
+        map.height as usize,
+        STRENGTH,
+    );
     *guard = Some(WeightCache {
         key,
         weight: weight.clone(),
@@ -367,7 +379,6 @@ fn cached_weight(map: &VideoMap) -> (Vec<f32>, usize) {
     });
     (weight, active)
 }
-
 
 #[allow(dead_code)]
 fn alpha_soft_gate(a: f32) -> f32 {
@@ -535,9 +546,8 @@ fn post_denoise_grain_and_luma(
     for i in 0..n {
         if ext[i] > 0.5 {
             let o = i * 3;
-            sum_ext += 0.299 * orig[o] as f32
-                + 0.587 * orig[o + 1] as f32
-                + 0.114 * orig[o + 2] as f32;
+            sum_ext +=
+                0.299 * orig[o] as f32 + 0.587 * orig[o + 1] as f32 + 0.114 * orig[o + 2] as f32;
         }
         let wi = weight[i];
         if wi > 0.05 {
@@ -733,7 +743,10 @@ fn post_denoise_grain_and_luma(
     let mut target_std = [0f32; 3];
     for c in 0..3 {
         let mean = ext_sum[c] / ext_n;
-        target_std[c] = ((ext_sq[c] / ext_n) - mean * mean).max(0.0).sqrt().max(1e-3);
+        target_std[c] = ((ext_sq[c] / ext_n) - mean * mean)
+            .max(0.0)
+            .sqrt()
+            .max(1e-3);
     }
 
     // Zero noise inside footprint before guiding (exterior-only sources).
@@ -991,8 +1004,12 @@ mod tests {
     #[test]
     fn footprint_weight_720p_active_2304() {
         let map = diamond_map_720p_standard();
-        let (_w, active) = footprint_weight(&map.alpha, map.width as usize, map.height as usize, 1.8);
-        assert_eq!(active, 2304, "expected full 48×48 footprint at strength 1.8");
+        let (_w, active) =
+            footprint_weight(&map.alpha, map.width as usize, map.height as usize, 1.8);
+        assert_eq!(
+            active, 2304,
+            "expected full 48×48 footprint at strength 1.8"
+        );
     }
 
     #[test]
@@ -1041,7 +1058,12 @@ mod tests {
             }
         }
         // Mid-side tips
-        for &(col, row) in &[(mw / 2, 0usize), (0, mh / 2), (mw / 2, mh - 1), (mw - 1, mh / 2)] {
+        for &(col, row) in &[
+            (mw / 2, 0usize),
+            (0, mh / 2),
+            (mw / 2, mh - 1),
+            (mw - 1, mh / 2),
+        ] {
             let i = row * mw + col;
             tip = tip.max(raw[i] * corner_alpha_gate(map.alpha[i], col, row, mw, mh));
         }

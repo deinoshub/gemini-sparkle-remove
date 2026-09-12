@@ -41,11 +41,8 @@ extern "C" {
 
     pub fn ncnn_extractor_create(net: ncnn_net_t) -> ncnn_extractor_t;
     pub fn ncnn_extractor_destroy(ex: ncnn_extractor_t);
-    pub fn ncnn_extractor_input_index(
-        ex: ncnn_extractor_t,
-        index: c_int,
-        mat: ncnn_mat_t,
-    ) -> c_int;
+    pub fn ncnn_extractor_input_index(ex: ncnn_extractor_t, index: c_int, mat: ncnn_mat_t)
+        -> c_int;
     pub fn ncnn_extractor_extract_index(
         ex: ncnn_extractor_t,
         index: c_int,

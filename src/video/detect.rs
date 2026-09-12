@@ -4,7 +4,9 @@
 //! prior and score luma against the embedded alpha map. Multi-frame probe
 //! keeps the highest-scoring consistent hit (GWT-style).
 
-use super::maps::{diamond_map_1080p_standard, diamond_map_720p_compact, diamond_map_720p_standard, VideoMap};
+use super::maps::{
+    diamond_map_1080p_standard, diamond_map_720p_compact, diamond_map_720p_standard, VideoMap,
+};
 use super::MarkKind;
 
 /// Minimum NCC accepted as a detection (rejects cleaned / empty BR ~0.50).
@@ -40,7 +42,9 @@ pub fn detect_on_frame(
     if width == 0 || height == 0 || maps.is_empty() {
         return None;
     }
-    let expected = (width as usize).checked_mul(height as usize)?.checked_mul(4)?;
+    let expected = (width as usize)
+        .checked_mul(height as usize)?
+        .checked_mul(4)?;
     if rgba.len() != expected {
         return None;
     }
@@ -82,15 +86,7 @@ pub fn detect_on_frame(
                 let x = width - mx - map.width;
                 let y = height - my - map.height;
                 let score = ncc_at(
-                    &luma,
-                    width,
-                    x,
-                    y,
-                    map.width,
-                    map.height,
-                    &map.alpha,
-                    tpl_mean,
-                    tpl_norm,
+                    &luma, width, x, y, map.width, map.height, &map.alpha, tpl_mean, tpl_norm,
                 );
                 if score < MIN_NCC {
                     continue;
@@ -251,22 +247,14 @@ mod tests {
         assert_eq!(det.w, 48);
         assert_eq!(det.h, 48);
         // GWT sample hit ~(1136, 576); allow small snap slack.
+        assert!((det.x as i32 - 1136).abs() <= 4, "x={} want ~1136", det.x);
+        assert!((det.y as i32 - 576).abs() <= 4, "y={} want ~576", det.y);
+        assert!(det.score >= MIN_NCC, "score {} below MIN_NCC", det.score);
         assert!(
-            (det.x as i32 - 1136).abs() <= 4,
-            "x={} want ~1136",
-            det.x
-        );
-        assert!(
-            (det.y as i32 - 576).abs() <= 4,
-            "y={} want ~576",
-            det.y
-        );
-        assert!(
-            det.score >= MIN_NCC,
-            "score {} below MIN_NCC",
+            det.score > 0.7,
+            "expected strong mid-frame NCC, got {}",
             det.score
         );
-        assert!(det.score > 0.7, "expected strong mid-frame NCC, got {}", det.score);
     }
 
     #[test]
