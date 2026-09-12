@@ -1,6 +1,6 @@
 [package]
 name = "gemini-unmark"
-version = "0.2.1"
+version = "0.2.2"
 edition = "2021"
 license = "MIT"
 description = "Remove Gemini visible sparkle watermarks via reverse alpha-blend (pure Rust)"
