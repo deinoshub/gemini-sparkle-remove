@@ -40,8 +40,9 @@ const MAX_SIZE: u32 = 56;
 const MIN_INSET: u32 = 40;
 const MAX_INSET: u32 = 116;
 
-/// Opacity scales for version differences.
-const ALPHA_SCALES: [f64; 4] = [1.0, 1.25, 1.55, 1.9];
+/// Opacity scales. Values below 1.0 cover faint 2K-on-sky / snow marks where
+/// scale 1.0 over-subtracts (survival > 1).
+const ALPHA_SCALES: [f64; 7] = [0.55, 0.70, 0.85, 1.0, 1.25, 1.55, 1.9];
 
 /// NCC locator (independent right/bottom margins). High on purpose so gravel
 /// false peaks (posing 1K sandal ~0.61) never become the proposal.
@@ -726,7 +727,10 @@ mod tests {
     }
 
     fn paint_sparkle(data: &mut [u8], w: u32, x: u32, y: u32) {
-        let tpl = crate::sparkle_template();
+        paint_template(data, w, x, y, &crate::sparkle_template());
+    }
+
+    fn paint_template(data: &mut [u8], w: u32, x: u32, y: u32, tpl: &crate::WatermarkTemplate) {
         for ty in 0..tpl.height {
             for tx in 0..tpl.width {
                 let ti = ((ty * tpl.width + tx) * 4) as usize;
@@ -740,6 +744,15 @@ mod tests {
                         .round() as u8;
                 }
             }
+        }
+    }
+
+    fn fill_rgb(data: &mut [u8], r: u8, g: u8, b: u8) {
+        for i in 0..data.len() / 4 {
+            data[i * 4] = r;
+            data[i * 4 + 1] = g;
+            data[i * 4 + 2] = b;
+            data[i * 4 + 3] = 255;
         }
     }
 
@@ -884,6 +897,24 @@ mod tests {
             }
         }
         data
+    }
+
+    #[test]
+    fn faint_sparkle_on_bright_sky_is_found() {
+        // 2K-on-sky: real mark is ~0.55 of the template. Scale 1.0 punches a
+        // dark hole (survival > 1) so ALPHA_SCALES must include fainter values.
+        let w = 400u32;
+        let h = 300u32;
+        let s = crate::SPARKLE_SIZE;
+        let x = w - 89 - s;
+        let y = h - 89 - s;
+        let mut data = vec![0u8; (w * h * 4) as usize];
+        fill_rgb(&mut data, 180, 210, 235);
+        let faint = with_opacity(&crate::sparkle_template(), 0.55);
+        paint_template(&mut data, w, x, y, &faint);
+        let m = match_watermark(w, h, &data).expect("faint sparkle on bright sky");
+        assert!((m.x as i32 - x as i32).abs() <= 4, "x={} want {x}", m.x);
+        assert!((m.y as i32 - y as i32).abs() <= 4, "y={} want {y}", m.y);
     }
 
     #[test]
