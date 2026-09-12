@@ -23,6 +23,15 @@ const MAX_SILHOUETTE_VS_CONTROL: f64 = 3.0;
 const STRONG_SURVIVAL: f64 = 0.70;
 const STRONG_GATE2: f64 = 3.75;
 
+/// Below this, Gate 2 is skipped: leftover JPEG ringing vs empty neighbors is
+/// not an impostor signal. Wood fixture is ~0.52 so it still uses Gate 2.
+/// Jazz-on-rope measured 0.293 — 0.007 under this cutoff.
+const VERY_STRONG_SURVIVAL: f64 = 0.30;
+
+/// Control below this on the strong path is uninformative (dark BR JPEG ~1).
+/// Do not use this floor on the normal Gate 2 line (canonical max 0.98).
+const CONTROL_INFORMATIVE: f64 = 8.0;
+
 /// Scale search bounds (mark is ~48px in real samples).
 const MIN_SIZE: u32 = 42;
 const MAX_SIZE: u32 = 56;
@@ -230,12 +239,19 @@ fn search(
     choose_match(cands, img_w, img_h, img, max_survival)
 }
 
+fn strong_path_ok(survival: f64, gate2: f64, control: f64) -> bool {
+    if survival <= VERY_STRONG_SURVIVAL {
+        return true;
+    }
+    survival <= STRONG_SURVIVAL && (gate2 <= STRONG_GATE2 || control < CONTROL_INFORMATIVE)
+}
+
 fn gates_ok(survival: f64, after: f64, control: f64, max_survival: f64) -> bool {
     if !survival.is_finite() {
         return false;
     }
     let gate2 = if control > 1e-6 { after / control } else { 0.0 };
-    if survival <= STRONG_SURVIVAL && gate2 <= STRONG_GATE2 {
+    if strong_path_ok(survival, gate2, control) {
         return true;
     }
     if survival > max_survival {
@@ -248,7 +264,7 @@ fn ncc_gates_ok(survival: f64, gate2: f64, control: f64) -> bool {
     if !survival.is_finite() {
         return false;
     }
-    if survival <= STRONG_SURVIVAL && gate2 <= STRONG_GATE2 {
+    if strong_path_ok(survival, gate2, control) {
         return true;
     }
     if survival >= NCC_SURVIVAL {
@@ -775,8 +791,8 @@ mod tests {
             template: tpl,
         };
         // Fake image large enough for control_edges on winner (x=40,y=40,s=48).
-        // Texture so control_edges is non-tiny: uniform grey has zero gradient,
-        // and gates_ok treats control <= 1e-6 as a Gate 2 pass.
+        // XOR texture keeps control above CONTROL_INFORMATIVE; uniform grey
+        // would take the strong-path empty-control pass (loser survival 0.50).
         let w = 200u32;
         let h = 200u32;
         let mut data = vec![0u8; (w * h * 4) as usize];
@@ -791,7 +807,8 @@ mod tests {
             }
         }
         // Loser at (80,80) so grab() succeeds; after=1e6 so Gate 2 fails even
-        // if control is modest. Winner after=1.0 passes Gate 2.
+        // if control is modest (XOR keeps control well above CONTROL_INFORMATIVE).
+        // Winner after=1.0 passes Gate 2.
         let got = choose_match(vec![loser, winner.clone()], w, h, &data, 0.98)
             .expect("second candidate must pass after first fails gates");
         assert_eq!(got.x, 40);
@@ -813,6 +830,41 @@ mod tests {
     #[test]
     fn ncc_gate2_still_rejects_rock_impostor() {
         assert!(!ncc_gates_ok(0.80, 3.90, 1.0));
+    }
+
+    #[test]
+    fn very_strong_survival_passes_despite_empty_control() {
+        // Diamond-like: outline gone (surv 0.02) but JPEG-dark neighbors make
+        // Gate 2 = 60/0.8 = 75. Must not reject.
+        assert!(gates_ok(0.02, 60.0, 0.8, MAX_SILHOUETTE_SURVIVAL_CANON));
+        assert!(ncc_gates_ok(0.02, 75.0, 0.8));
+    }
+
+    #[test]
+    fn very_strong_survival_passes_with_informative_control() {
+        // Frost/PCB-like: surv 0.25, control ~70, Gate 2 ~5.7 (> 3.75).
+        assert!(gates_ok(0.25, 400.0, 70.0, MAX_SILHOUETTE_SURVIVAL_CANON));
+        assert!(ncc_gates_ok(0.25, 5.71, 70.0));
+    }
+
+    #[test]
+    fn rock_impostor_still_fails_silhouette_gates() {
+        assert!(!gates_ok(0.80, 3.9, 1.0, MAX_SILHOUETTE_SURVIVAL));
+    }
+
+    #[test]
+    fn strong_path_accepts_uninformative_control() {
+        // surv 0.50 is above VERY_STRONG, below STRONG; Gate 2 exploded.
+        assert!(gates_ok(0.50, 60.0, 0.8, MAX_SILHOUETTE_SURVIVAL_CANON));
+        assert!(ncc_gates_ok(0.50, 75.0, 0.8));
+    }
+
+    #[test]
+    fn normal_path_does_not_treat_jpeg_dark_as_empty_control() {
+        // Raising the 1e-6 floor to CONTROL_INFORMATIVE on this line would
+        // let survival ~0.75 blobs on black through canonical max 0.98.
+        assert!(!gates_ok(0.75, 60.0, 0.8, MAX_SILHOUETTE_SURVIVAL_CANON));
+        assert!(!ncc_gates_ok(0.75, 75.0, 0.8));
     }
 
     fn noise_canvas(w: u32, h: u32) -> Vec<u8> {
