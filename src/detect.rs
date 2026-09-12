@@ -71,6 +71,8 @@ pub struct Match {
     pub residual: f64,
     /// Winning scaled/opacity-adjusted overlay (same as used for the gates).
     pub template: WatermarkTemplate,
+    /// Median silhouette energy of nearby control patches (smooth BR is ~1–30).
+    pub(crate) control: f64,
 }
 
 /// Locate Gemini's sparkle overlay. Returns `None` if no candidate clears both gates.
@@ -154,6 +156,7 @@ fn choose_match(
                 height: c.size,
                 residual: c.survival,
                 template: c.template,
+                control,
             });
         }
     }
@@ -541,6 +544,7 @@ fn ncc_search(img_w: u32, img_h: u32, img: &[u8]) -> Option<Match> {
         height: s,
         residual: survival,
         template: tpl,
+        control,
     })
 }
 
@@ -915,6 +919,35 @@ mod tests {
         let m = match_watermark(w, h, &data).expect("faint sparkle on bright sky");
         assert!((m.x as i32 - x as i32).abs() <= 4, "x={} want {x}", m.x);
         assert!((m.y as i32 - y as i32).abs() <= 4, "y={} want {y}", m.y);
+        {
+            let mut img = crate::RgbaImage {
+                width: w,
+                height: h,
+                data: &mut data,
+            };
+            assert!(matches!(
+                crate::remove_gemini_sparkle(&mut img),
+                crate::RemoveResult::Removed { .. }
+            ));
+        }
+        // High-alpha cells must land back on the sky, not a leftover star.
+        for ty in 0..faint.height {
+            for tx in 0..faint.width {
+                if faint.data[((ty * faint.width + tx) * 4 + 3) as usize] < 20 {
+                    continue;
+                }
+                let i = (((y + ty) * w + (x + tx)) * 4) as usize;
+                assert!(
+                    (data[i] as i32 - 180).abs() < 12
+                        && (data[i + 1] as i32 - 210).abs() < 12
+                        && (data[i + 2] as i32 - 235).abs() < 12,
+                    "leftover sparkle at +({tx},{ty}) rgb=({},{},{})",
+                    data[i],
+                    data[i + 1],
+                    data[i + 2]
+                );
+            }
+        }
     }
 
     #[test]

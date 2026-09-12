@@ -9,7 +9,7 @@ use crate::WatermarkTemplate;
 
 use super::detect::VideoDetection;
 use super::maps::VideoMap;
-use super::telea::inpaint_telea;
+use crate::telea::inpaint_telea;
 
 /// Same opaque cutoff as the still-image remove path.
 const OPAQUE_CUTOFF: f64 = 0.95;

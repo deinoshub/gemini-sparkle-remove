@@ -13,7 +13,6 @@ mod maps;
 #[cfg(feature = "video-fdncnn")]
 mod ncnn_ffi;
 mod pipeline;
-mod telea;
 
 pub use alpha::{
     estimate_alpha, pick_alpha_by_silhouette, refine_alpha_bisection, FRAME_ALPHA_CAP,
