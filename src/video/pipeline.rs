@@ -53,7 +53,7 @@ pub fn remove_video(
     }
     if matches!(opts.mark, MarkKind::Veo) {
         return Err(VideoError::Detect(
-            "Veo mark removal is not available in phase 1".into(),
+            "Veo mark removal is not implemented".into(),
         ));
     }
 
@@ -80,7 +80,6 @@ pub fn remove_video(
 
     let map = select_map(&det, opts)?;
 
-    // Phase 1: alpha intensity.
     // Seed-lock a per-shot constant, then silhouette-pick among
     // {seed, 1.0, 1.05, 1.12} unless force_alpha is set.
     let (alpha_scale, seed) = resolve_alpha_scale(
@@ -96,8 +95,8 @@ pub fn remove_video(
         alpha_scale, seed, det.x, det.y, det.w, det.h
     );
 
-    // Phase 2: reverse-blend. Residual is opaque fill + optional thin ring
-    // inside `remove_on_frame`. FDnCNN still blend-only then denoise.
+    // Reverse-blend. Residual is opaque fill + optional thin ring inside
+    // `remove_on_frame`. FDnCNN still blend-only then denoise.
     let width = probe.width;
     let height = probe.height;
     frames.par_iter_mut().for_each(|rgba| {
@@ -115,8 +114,8 @@ pub fn remove_video(
     }
 
     // Residual cleanup: with `video-fdncnn`, in-process NcnnDenoiser only
-    // (GWT video is blend→AI; opaque + optional thin ring already ran inside
-    // remove_on_frame when FDnCNN is disabled).
+    // (opaque + optional thin ring already ran inside `remove_on_frame`
+    // when FDnCNN is disabled).
     #[cfg(feature = "video-fdncnn")]
     {
         if !fdncnn_postpass_raw(&mut frames, probe.width, probe.height, &det, &map) {
@@ -151,13 +150,12 @@ fn resolve_alpha_scale(
     (picked, seed)
 }
 
-/// GWT-style per-shot constant alpha: refine on a few evenly spaced frames,
-/// return the median (stable across the clip).
+/// Per-shot constant alpha: refine on a few evenly spaced frames, return
+/// the median (stable across the clip).
 ///
-/// Soft clips often lock ~0.90–0.93 while GWT operates near ~1.0, which leaves
-/// a bright tip residual. Blind force-1.0 helps those but regresses already
-/// well-locked smoke clips (e.g. 8e9d ≈ 0.98). Only lift clearly under-locked
-/// seeds; leave near-1.0 locks alone.
+/// Soft clips often lock ~0.90–0.93, which leaves a bright tip residual.
+/// Blind force-1.0 helps those but regresses already well-locked clips
+/// near 1.0. Only lift clearly under-locked seeds.
 fn seed_alpha_locked(
     frames: &[Vec<u8>],
     width: u32,
@@ -165,9 +163,9 @@ fn seed_alpha_locked(
     det: &VideoDetection,
     map: &VideoMap,
 ) -> f32 {
-    /// Below this median the seed is treated as under-locked vs GWT ~1.0.
+    /// Below this median the seed is treated as under-locked vs ~1.0.
     const UNDER_LOCK_THR: f32 = 0.95;
-    /// Target scale for under-locked soft clips (GWT-like).
+    /// Target scale for under-locked soft clips.
     const UNDER_LOCK_TARGET: f32 = 1.0;
 
     let n = frames.len();
@@ -213,9 +211,7 @@ fn select_map(det: &VideoDetection, opts: &VideoRemoveOptions) -> Result<VideoMa
     }
     match det.mark {
         MarkKind::Diamond | MarkKind::Auto => Ok(diamond_map_720p_standard()),
-        MarkKind::Veo => Err(VideoError::Detect(
-            "Veo maps not available in phase 1".into(),
-        )),
+        MarkKind::Veo => Err(VideoError::Detect("Veo maps are not implemented".into())),
     }
 }
 
@@ -679,12 +675,12 @@ mod tests {
     use super::*;
     use std::path::PathBuf;
 
-    fn sample_input() -> PathBuf {
-        PathBuf::from("/workspace/video-in/input.mp4")
+    fn sample_input() -> Option<PathBuf> {
+        std::env::var_os("GUM_SAMPLE_VIDEO").map(PathBuf::from)
     }
 
-    fn gwt_cleaned() -> PathBuf {
-        PathBuf::from("/workspace/video-out/cleaned.mp4")
+    fn reference_cleaned() -> Option<PathBuf> {
+        std::env::var_os("GUM_REFERENCE_VIDEO").map(PathBuf::from)
     }
 
     fn br_mean_abs_diff(a: &[u8], b: &[u8], stride: u32, x: u32, y: u32, rw: u32, rh: u32) -> f64 {
@@ -749,7 +745,10 @@ mod tests {
             eprintln!("skip remove_video_sample: ffmpeg/ffprobe not available");
             return;
         }
-        let input = sample_input();
+        let Some(input) = sample_input() else {
+            eprintln!("skip remove_video_sample: GUM_SAMPLE_VIDEO not set");
+            return;
+        };
         if !input.is_file() {
             eprintln!("skip remove_video_sample: missing {}", input.display());
             return;
@@ -825,16 +824,15 @@ mod tests {
             "BR mean-abs-diff vs original too small ({diff}); watermark may remain"
         );
 
-        // Loose compare to GWT baseline BR (same mid frame): our change should be
-        // in the same ballpark as GWT's (at least ~80% of GWT mean-diff).
-        let gwt = gwt_cleaned();
-        if gwt.is_file() {
-            let gwt_png = out_dir.path().join("gwt_mid.png");
-            extract_one_png(&gwt, mid, &gwt_png).expect("gwt mid");
-            let gwt_img = image::open(&gwt_png).unwrap().to_rgba8();
-            let gwt_diff = br_mean_abs_diff(
+        // Optional compare to a reference cleaned video (same mid frame):
+        // our BR change should be at least ~80% of the reference mean-diff.
+        if let Some(reference) = reference_cleaned().filter(|p| p.is_file()) {
+            let ref_png = out_dir.path().join("ref_mid.png");
+            extract_one_png(&reference, mid, &ref_png).expect("reference mid");
+            let ref_img = image::open(&ref_png).unwrap().to_rgba8();
+            let ref_diff = br_mean_abs_diff(
                 before.as_raw(),
-                gwt_img.as_raw(),
+                ref_img.as_raw(),
                 before.width(),
                 bx,
                 by,
@@ -842,16 +840,16 @@ mod tests {
                 bh,
             );
             assert!(
-                diff >= gwt_diff * 0.8,
-                "ours BR diff {diff} << GWT {gwt_diff}"
+                diff >= ref_diff * 0.8,
+                "ours BR diff {diff} << reference {ref_diff}"
             );
             eprintln!(
-                "remove_video_sample OK: frames={} dur={dur:.3}s BR_diff={diff:.2} GWT_BR_diff={gwt_diff:.2} region={:?}",
+                "remove_video_sample OK: frames={} dur={dur:.3}s BR_diff={diff:.2} ref_BR_diff={ref_diff:.2} region={:?}",
                 result.frames_processed, result.region
             );
         } else {
             eprintln!(
-                "remove_video_sample OK: frames={} dur={dur:.3}s BR_diff={diff:.2} (no GWT baseline)",
+                "remove_video_sample OK: frames={} dur={dur:.3}s BR_diff={diff:.2} (no reference video)",
                 result.frames_processed
             );
         }
@@ -996,8 +994,8 @@ mod tests {
         let (picked, seed) = resolve_alpha_scale(&frames, 32, 32, &det, &map, None);
         let no_pick = seed;
         let via_pick = pick_alpha_by_silhouette(&frames, 32, 32, &det, &map, seed);
-        // seed_alpha_locked damps toward SCALE_NOMINAL≈0.96 (never <0.94: under
-        // 0.95 is lifted to 1.0). Pick must still move that seed toward 1.0.
+        // seed_alpha_locked damps toward SCALE_NOMINAL≈0.96 (under 0.95 is
+        // lifted to 1.0). Pick must still move that seed toward 1.0.
         assert!(seed < 0.98, "seed should sit under true 1.0, got {seed}");
         assert!(
             (picked - no_pick).abs() > 1e-3,

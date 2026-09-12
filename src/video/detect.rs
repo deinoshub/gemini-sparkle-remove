@@ -1,8 +1,8 @@
 //! Multi-frame diamond / Veo probe via normalized cross-correlation (NCC).
 //!
-//! Phase-1 focuses on the 720p Gemini diamond: search a bottom-right margin
-//! prior and score luma against the embedded alpha map. Multi-frame probe
-//! keeps the highest-scoring consistent hit (GWT-style).
+//! The 720p Gemini diamond is scored against the embedded alpha map in a
+//! bottom-right margin prior. Multi-frame probe keeps the highest-scoring
+//! consistent hit.
 
 use super::maps::{
     diamond_map_1080p_standard, diamond_map_720p_compact, diamond_map_720p_standard, VideoMap,
@@ -116,7 +116,7 @@ pub fn detect_on_frame(
 ///
 /// Tries 720p (48×48) and 1080p (72×72) diamond maps. Prefer this over a single frame 0 —
 /// some frames occlude the mark (low NCC) while others lock cleanly near the
-/// GWT prior `(1136, 576)` on 1280×720.
+/// geometry prior `(1136, 576)` on 1280×720.
 pub fn detect_from_probe_frames(frames: &[(u32, u32, Vec<u8>)]) -> Option<VideoDetection> {
     if frames.is_empty() {
         return None;
@@ -232,7 +232,7 @@ mod tests {
 
     fn load_mid_frame() -> (u32, u32, Vec<u8>) {
         let img = image::open("tests/fixtures/video/mid_frame_720p.png")
-            .expect("mid-frame fixture; extract with ffmpeg from /workspace/video-in/input.mp4")
+            .expect("mid-frame fixture at tests/fixtures/video/mid_frame_720p.png")
             .to_rgba8();
         (img.width(), img.height(), img.into_raw())
     }
@@ -246,7 +246,7 @@ mod tests {
         assert_eq!(det.mark, MarkKind::Diamond);
         assert_eq!(det.w, 48);
         assert_eq!(det.h, 48);
-        // GWT sample hit ~(1136, 576); allow small snap slack.
+        // Geometry prior ~(1136, 576); allow small snap slack.
         assert!((det.x as i32 - 1136).abs() <= 4, "x={} want ~1136", det.x);
         assert!((det.y as i32 - 576).abs() <= 4, "y={} want ~576", det.y);
         assert!(det.score >= MIN_NCC, "score {} below MIN_NCC", det.score);

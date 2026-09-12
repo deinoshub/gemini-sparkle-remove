@@ -102,7 +102,7 @@ mod tests {
         let mask = reverse_alpha_blend(2, 2, &mut img, &tpl, 0, 0, 0.95);
 
         assert_eq!(mask.len(), 4);
-        assert_eq!(mask[0], 0); // recoverable
+        assert_eq!(mask[0], 0);
         // Recovered RGB ≈ 100 (allow ±1 for rounding)
         assert!((img[0] as i16 - 100).abs() <= 1, "R={}", img[0]);
         assert!((img[1] as i16 - 100).abs() <= 1, "G={}", img[1]);

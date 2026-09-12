@@ -54,10 +54,14 @@ mod tests {
         assert_eq!(SPARKLE_GEOMETRY.size_px, 48);
         assert_eq!(SPARKLE_GEOMETRY.inset_px, 96);
         // Peak opacity ~0.31 → alpha byte ≤ ~79; bound with headroom.
-        let max_a = tpl.data.iter().skip(3).step_by(4).copied().max().unwrap_or(0);
-        assert!(
-            max_a <= 90,
-            "expected peak sparkle alpha ≤ 90, got {max_a}"
-        );
+        let max_a = tpl
+            .data
+            .iter()
+            .skip(3)
+            .step_by(4)
+            .copied()
+            .max()
+            .unwrap_or(0);
+        assert!(max_a <= 90, "expected peak sparkle alpha ≤ 90, got {max_a}");
     }
 }

@@ -96,8 +96,8 @@ fn process_video(args: &Args) -> Result<(), String> {
         legacy: args.legacy,
         force_alpha: args.force_alpha,
     };
-    let result = remove_video(&args.input, &args.output, &opts)
-        .map_err(|e| format!("remove_video: {e}"))?;
+    let result =
+        remove_video(&args.input, &args.output, &opts).map_err(|e| format!("remove_video: {e}"))?;
     eprintln!(
         "ok frames={} skipped={} mark={:?} region={:?}",
         result.frames_processed, result.frames_skipped, result.mark, result.region

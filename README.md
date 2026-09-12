@@ -6,7 +6,7 @@ Rust library that removes Gemini visible sparkle watermarks from RGBA buffers vi
 
 Pure Rust runtime (no Python). MIT licensed.
 
-Port of [long66666/gemini-watermark-remover](https://github.com/long66666/gemini-watermark-remover), plus GWT/Veo-style video ideas (diamond reverse-blend, adaptive alpha, FDnCNN ROI cleanup).
+Port of [long66666/gemini-watermark-remover](https://github.com/long66666/gemini-watermark-remover), plus video support (diamond reverse-blend, adaptive alpha, FDnCNN ROI cleanup). Maps and FDnCNN weights are derived from GeminiWatermarkTool-Video / NcnnDenoiser.
 
 Repository: [deinoshub/gemini-unmark](https://github.com/deinoshub/gemini-unmark).
 
@@ -53,19 +53,19 @@ Runtime resolution order: env override → build-time vendored paths (unless `sy
 
 ## Usage
 
-### Path dependency
+### Dependency
 
 ```toml
-gemini-unmark = { path = "../gemini-unmark" }
+gemini-unmark = { git = "https://github.com/deinoshub/gemini-unmark" }
 
 # video (downloads ffmpeg tools at build when online):
-gemini-unmark = { path = "../gemini-unmark", features = ["video"] }
+gemini-unmark = { git = "https://github.com/deinoshub/gemini-unmark", features = ["video"] }
 
 # video without downloading ffmpeg (system PATH / GUM_* only):
-gemini-unmark = { path = "../gemini-unmark", features = ["video", "system-ffmpeg"] }
+gemini-unmark = { git = "https://github.com/deinoshub/gemini-unmark", features = ["video", "system-ffmpeg"] }
 
-# + in-process FDnCNN (cmake-builds ncnn for the target):
-gemini-unmark = { path = "../gemini-unmark", features = ["video-fdncnn"] }
+# + in-process FDnCNN (downloads official ncnn zip for the target):
+gemini-unmark = { git = "https://github.com/deinoshub/gemini-unmark", features = ["video-fdncnn"] }
 ```
 
 ### CLI (feature = `"cli"`)
@@ -146,6 +146,10 @@ git push origin v0.2.4
 
 `.github/workflows/release.yml` packages the crate and attaches Linux/macOS/Windows CLI binaries plus `SHA256SUMS.txt` (no crates.io publish).
 
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for build, test, and example commands.
+
 ## License
 
-MIT
+MIT. Copyright (c) 2026 deinoshub.

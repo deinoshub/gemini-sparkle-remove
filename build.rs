@@ -565,8 +565,26 @@ fn download_ffmpeg_bundle(
             let pz = staging.join("ffprobe.zip");
             download_url(spec.urls[0], &fz)?;
             download_url(spec.urls[1], &pz)?;
-            run_cmd("unzip", &["-o", "-q", fz.to_str().unwrap(), "-d", staging.to_str().unwrap()])?;
-            run_cmd("unzip", &["-o", "-q", pz.to_str().unwrap(), "-d", staging.to_str().unwrap()])?;
+            run_cmd(
+                "unzip",
+                &[
+                    "-o",
+                    "-q",
+                    fz.to_str().unwrap(),
+                    "-d",
+                    staging.to_str().unwrap(),
+                ],
+            )?;
+            run_cmd(
+                "unzip",
+                &[
+                    "-o",
+                    "-q",
+                    pz.to_str().unwrap(),
+                    "-d",
+                    staging.to_str().unwrap(),
+                ],
+            )?;
             let ffmpeg_src = find_named_file(&staging, "ffmpeg")
                 .ok_or_else(|| "evermeet zip missing ffmpeg".to_string())?;
             let ffprobe_src = find_named_file(&staging, "ffprobe")
@@ -639,11 +657,8 @@ fn download_url(url: &str, dest: &Path) -> Result<(), String> {
         ],
     ) {
         Ok(()) => Ok(()),
-        Err(curl_err) => run_cmd(
-            "wget",
-            &["-q", "-O", dest.to_str().unwrap(), url],
-        )
-        .map_err(|wget_err| format!("download {url}: curl: {curl_err}; wget: {wget_err}")),
+        Err(curl_err) => run_cmd("wget", &["-q", "-O", dest.to_str().unwrap(), url])
+            .map_err(|wget_err| format!("download {url}: curl: {curl_err}; wget: {wget_err}")),
     }
 }
 

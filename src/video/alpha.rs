@@ -1,7 +1,7 @@
 //! Per-frame adaptive alpha intensity (estimate + bisection feedback).
 //!
-//! The embedded diamond alpha map is already near operating opacity (GWT
-//! calib ≈ 0.97). Adaptive scale therefore stays close to 1.0: a raw LS fit
+//! The embedded diamond alpha map is already near operating opacity
+//! (≈ 0.97). Adaptive scale therefore stays close to 1.0: a raw LS fit
 //! against ROI border luma tends to overestimate on textured video, so we
 //! damp toward unity and score residue against an exterior ring background.
 
@@ -9,7 +9,7 @@ use super::detect::VideoDetection;
 use super::frame::remove_on_frame_blend_only;
 use super::maps::VideoMap;
 
-/// Cap absolute change vs the previous frame's applied scale (GWT-style).
+/// Cap absolute change vs the previous frame's applied scale.
 pub const FRAME_ALPHA_CAP: f32 = 0.05;
 
 /// Minimum map alpha to include in LS / residual scoring.
@@ -17,14 +17,12 @@ const ALPHA_EPS: f32 = 0.02;
 
 /// Soft clamp for intensity scales.
 ///
-/// GWT video locks a dynamic seed ≈ x0.58 on a large map peaking ≈ 0.51
-/// (effective peak ≈ 0.30). Our embedded maps peak ≈ 0.345, so nominal
-/// scale ≈ 0.96 matches that operating opacity and avoids the dark
-/// diamond ghost from scale≈1.0 over-subtraction.
+/// Embedded maps peak ≈ 0.345. Nominal scale ≈ 0.96 matches operating
+/// opacity and avoids the dark diamond ghost from scale≈1.0 over-subtraction.
 const SCALE_MIN: f32 = 0.78;
 const SCALE_MAX: f32 = 1.05;
 
-/// Nominal operating scale when the embedded map matches GWT opacity.
+/// Nominal operating scale for the embedded map.
 const SCALE_NOMINAL: f32 = 0.96;
 
 /// Blend weight for the LS estimate vs [`SCALE_NOMINAL`] (rest → nominal).
@@ -34,7 +32,7 @@ const ESTIMATE_WEIGHT: f32 = 0.08;
 ///
 /// Fits `observed ≈ s·α·logo + (1 − s·α)·bg` in luma over high-α pixels,
 /// using a local background from low-α / border samples, then damps toward
-/// [`SCALE_NOMINAL`] so textured BR content cannot inflate scale past GWT.
+/// [`SCALE_NOMINAL`] so textured BR content cannot inflate scale.
 pub fn estimate_alpha(frame: &[u8], w: u32, h: u32, det: &VideoDetection, map: &VideoMap) -> f32 {
     if !dims_ok(frame, w, h, det, map) {
         return SCALE_NOMINAL;
@@ -77,7 +75,7 @@ pub fn estimate_alpha(frame: &[u8], w: u32, h: u32, det: &VideoDetection, map: &
         return SCALE_NOMINAL;
     }
     let raw = ((num / den) as f32).clamp(SCALE_MIN, SCALE_MAX);
-    // Damp toward nominal — map peak α already matches GWT operating opacity.
+    // Damp toward nominal — map peak α already matches operating opacity.
     (ESTIMATE_WEIGHT * raw + (1.0 - ESTIMATE_WEIGHT) * SCALE_NOMINAL).clamp(SCALE_MIN, SCALE_MAX)
 }
 
@@ -111,13 +109,10 @@ pub fn refine_alpha_bisection(
 
     // Residue feedback is conservative: the exterior ring is often darker than
     // the true under-mark background on textured BR content, so chasing
-    // alpha-weighted (luma − ring) → 0 systematically over-scales past GWT.
+    // alpha-weighted (luma − ring) → 0 systematically over-scales.
     // Only correct clear over-subtraction; allow a tiny bump for strong residue.
     let ring_bg = exterior_ring_luma(frame, w, h, det, map);
     let bias = residual_bias(frame, w, h, det, map, s, ring_bg);
-    // Correct clear over-subtraction; allow a tiny bump only for strong bright
-    // residue (watermark still visible). Seed-lock in the pipeline prevents
-    // per-frame ratcheting.
     if bias < -3.0 {
         s = (s - 0.04).max(SCALE_MIN);
     } else if bias > 6.0 {
@@ -429,7 +424,7 @@ fn median_f32(samples: &mut [f32]) -> Option<f32> {
 /// Positive ⇒ watermark residue (under-removed); negative ⇒ over-subtraction.
 ///
 /// Preferring the exterior ring over hi-α vs lo-α inside the ROI avoids
-/// chasing natural texture contrast to zero (which over-scales past GWT).
+/// chasing natural texture contrast to zero (which over-scales).
 fn residual_bias(
     frame: &[u8],
     w: u32,

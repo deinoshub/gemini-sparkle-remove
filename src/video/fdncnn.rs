@@ -1,16 +1,13 @@
-//! In-process FDnCNN (NcnnDenoiser) ROI postpass — GWT video semantics.
+//! In-process FDnCNN (NcnnDenoiser) ROI postpass.
 //!
-//! In-process port of the historical Python FDnCNN helper (no OpenCV/Python at runtime):
 //! sigma=75, strength=1.8, padding=64; gradient-masked footprint blend.
-//! Compositing matches GWT/NcnnDenoiser: `result = w*denoised + (1-w)*blend`
-//! with Gaussian σ=1.0 on the padded weight. No classical post-flatten /
-//! grain reinject / LF atten after denoise — those fought FDnCNN invent and
-//! left under-removal inside α (measured MAD/dark_tip vs GWT).
+//! Compositing: `result = w*denoised + (1-w)*blend` with Gaussian σ=1.0
+//! on the padded weight. No classical post-flatten after denoise.
 //!
-//! Soft ROI: GWT-exact weight pad + Gauss σ=1.0 (no corner α-gate).
-//! Full-strength FDnCNN blend always — NO weak-denoise / exemplar / mean-fill.
+//! Soft ROI: weight pad + Gauss σ=1.0 (no corner α-gate).
+//! Full-strength FDnCNN blend always.
 //!
-//! Temporal: motion-gated EMA on high-α ROI after parallel denoise (flicker).
+//! Temporal: motion-gated EMA on high-α ROI after parallel denoise.
 
 use std::cell::RefCell;
 use std::ffi::CString;
@@ -31,9 +28,7 @@ use super::ncnn_ffi::{
 const SIGMA: f32 = 75.0;
 const STRENGTH: f32 = 1.8;
 const PADDING: i32 = 64;
-/// Classical post after FDnCNN is OFF (GWT parity). Kept as named zeros so
-/// tests/docs still document the former knobs; do not re-enable without
-/// stage MAD proof that invent is preserved.
+/// Classical post-FDnCNN flatten is disabled.
 const POST_GRAIN_STRENGTH: f32 = 0.0;
 const POST_GRAIN_BLUR_SIGMA: f32 = 1.15;
 const POST_GRAIN_GUIDE_SIGMA: f32 = 2.0;
@@ -47,11 +42,11 @@ const DARK_FLAT_GUIDE_SIGMA: f32 = 5.0;
 const DARK_HOLE_PULL: f32 = 0.0;
 const BRIGHT_BG_LUMA: f32 = 80.0;
 /// Motion-gated temporal EMA on high-α ROI (second pass, sequential).
-/// GWT has no temporal EMA; was 0.28 for flicker only — disable for invent parity.
+/// Temporal EMA disabled (0 = off).
 const TEMPORAL_EMA: f32 = 0.0;
 /// Exterior MAD (0–255) at which temporal EMA fully disengages.
 const TEMPORAL_MOTION_SCALE: f32 = 20.0;
-/// Exact GWT weight softener (Python helper / NcnnDenoiser σ=1.0).
+/// Weight-mask Gaussian sigma.
 const WEIGHT_FEATHER_SIGMA: f32 = 1.0;
 /// Soft-gate footprint by map α: only near-zero α AABB *corners* are attenuated
 /// (tips sit mid-side at high α and stay fully weighted).
@@ -117,7 +112,7 @@ impl FdncnnNet {
     }
 
     /// RGB uint8 H×W×3 interleaved → denoised RGB float in [0, 255] (no u8 round-trip).
-    /// Matches GWT float composite path more closely than quantizing before blend.
+    /// Float composite path (no u8 round-trip before blend).
     pub fn run_fdncnn_f32(
         &self,
         rgb_u8: &[u8],
@@ -326,7 +321,7 @@ fn gaussian_blur(src: &[f32], w: usize, h: usize, sigma: f32) -> Vec<f32> {
     dst
 }
 
-/// Gradient-masked footprint (GWT `compute_gradient_mask`).
+/// Gradient-masked footprint.
 pub fn footprint_weight(alpha: &[f32], w: usize, h: usize, strength: f32) -> (Vec<f32>, usize) {
     assert_eq!(alpha.len(), w * h);
     let mag = sobel_mag(alpha, w, h);
@@ -446,7 +441,7 @@ fn process_frame_rgba(
         return false;
     };
 
-    // Pad weight into ROI exactly like GWT (no corner α-gate), then σ=1 feather.
+    // Pad weight into ROI (no corner α-gate), then σ=1 feather.
     let mw = map.width as usize;
     let mh = map.height as usize;
     let mut wpad = vec![0f32; pw * ph];
@@ -459,7 +454,7 @@ fn process_frame_rgba(
     }
     wpad = gaussian_blur(&wpad, pw, ph, WEIGHT_FEATHER_SIGMA);
 
-    // Full-strength FDnCNN blend (GWT float path): result = w*denoised + (1-w)*original.
+    // Full-strength FDnCNN blend: result = w*denoised + (1-w)*original.
     let mut out = vec![0f32; pw * ph * 3];
     for i in 0..pw * ph {
         let wi = wpad[i];
@@ -471,8 +466,7 @@ fn process_frame_rgba(
         }
     }
 
-    // GWT stops at weighted FDnCNN composite. Classical post (grain / luma /
-    // dark-flat / LF atten) is disabled — it raised MAD vs GWT by undoing invent.
+    // Classical post (grain / luma / dark-flat / LF atten) is disabled.
     if POST_GRAIN_STRENGTH > 1e-6
         || POST_LUMA_MATCH > 1e-6
         || RESIDUAL_LF_ATTEN > 1e-6
@@ -1072,8 +1066,8 @@ mod tests {
     }
 
     #[test]
-    fn gwt_parity_post_off_and_feather_exact() {
-        // Classical post off; feather σ=1; temporal EMA off (GWT has none).
+    fn post_off_and_feather_exact() {
+        // Classical post off; feather σ=1; temporal EMA off.
         assert_eq!(POST_GRAIN_STRENGTH, 0.0);
         assert_eq!(POST_LUMA_MATCH, 0.0);
         assert_eq!(RESIDUAL_LF_ATTEN, 0.0);

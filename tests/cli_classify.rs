@@ -3,7 +3,9 @@ use std::path::Path;
 
 #[test]
 fn still_image_extensions_are_image() {
-    for p in ["shot.png", "a.JPG", "b.jpeg", "c.webp", "d.bmp", "e.tif", "f.tiff"] {
+    for p in [
+        "shot.png", "a.JPG", "b.jpeg", "c.webp", "d.bmp", "e.tif", "f.tiff",
+    ] {
         assert_eq!(
             classify_input(Path::new(p)).unwrap(),
             InputKind::Image,

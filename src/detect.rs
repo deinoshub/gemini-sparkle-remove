@@ -25,7 +25,6 @@ const STRONG_GATE2: f64 = 3.75;
 
 /// Below this, Gate 2 is skipped: leftover JPEG ringing vs empty neighbors is
 /// not an impostor signal. Wood fixture is ~0.52 so it still uses Gate 2.
-/// Jazz-on-rope measured 0.293 — 0.007 under this cutoff.
 const VERY_STRONG_SURVIVAL: f64 = 0.30;
 
 /// Control below this on the strong path is uninformative (dark BR JPEG ~1).
@@ -84,7 +83,10 @@ impl std::fmt::Debug for Match {
             .field("height", &self.height)
             .field("residual", &self.residual)
             .field("control", &self.control)
-            .field("template", &format_args!("{}x{}", self.template.width, self.template.height))
+            .field(
+                "template",
+                &format_args!("{}x{}", self.template.width, self.template.height),
+            )
             .finish()
     }
 }
@@ -646,7 +648,7 @@ mod tests {
             .to_rgba8();
         let (w, h) = (img.width(), img.height());
         let m = match_watermark(w, h, img.as_raw()).expect("should detect sparkle");
-        // Prior gwr and this port both land at ~(1255, 647) on 1376×768 (inset ~73, size 48).
+        // Expected sparkle near (1255, 647) on 1376×768 (inset ~73, size 48).
         assert!((m.x as i32 - 1255).abs() <= 20, "x={} (want ~1255)", m.x);
         assert!((m.y as i32 - 647).abs() <= 20, "y={} (want ~647)", m.y);
         assert!((42..=56).contains(&m.width), "width={}", m.width);

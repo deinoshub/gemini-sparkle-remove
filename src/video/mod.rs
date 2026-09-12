@@ -1,7 +1,7 @@
 //! Optional video watermark removal (feature = `"video"`).
 //!
-//! Phase-1: public types, errors, embedded 720p/1080p diamond maps, NCC detect,
-//! adaptive alpha, per-frame reverse-blend, and ffmpeg `remove_video` pipeline.
+//! Embedded 720p/1080p diamond maps, NCC detect, adaptive alpha, per-frame
+//! reverse-blend, and an ffmpeg `remove_video` pipeline.
 
 mod alpha;
 mod detect;
@@ -43,7 +43,7 @@ pub struct VideoRemoveOptions {
     pub mark: MarkKind,
     /// Use legacy / compact geometry when true.
     pub legacy: bool,
-    /// Force a fixed alpha scale (maps to GWT `--veo-alpha`); `None` = adaptive.
+    /// Force a fixed alpha scale; `None` = adaptive.
     pub force_alpha: Option<f32>,
 }
 

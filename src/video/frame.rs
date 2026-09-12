@@ -409,7 +409,7 @@ fn gaussian_masked(roi: &mut [f32], mask: &[bool], mw: usize, mh: usize, rad: i3
 }
 
 /// Reinject exterior high-frequency grain into mask pixels so a strong
-/// footprint fill does not go plastic-smooth vs GWT/FDnCNN fabric grain.
+/// footprint fill does not go plastic-smooth versus fabric grain.
 fn reinject_exterior_grain(
     roi: &mut [f32],
     blended: &[f32],
