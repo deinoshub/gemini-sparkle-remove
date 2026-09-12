@@ -61,7 +61,7 @@ const TOP_K: usize = 5;
 const PATCH_MARGIN: i32 = 3;
 
 /// Detected watermark placement and residual silhouette survival.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct Match {
     pub x: u32,
     pub y: u32,
@@ -73,6 +73,20 @@ pub struct Match {
     pub template: WatermarkTemplate,
     /// Median silhouette energy of nearby control patches (smooth BR is ~1–30).
     pub(crate) control: f64,
+}
+
+impl std::fmt::Debug for Match {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Match")
+            .field("x", &self.x)
+            .field("y", &self.y)
+            .field("width", &self.width)
+            .field("height", &self.height)
+            .field("residual", &self.residual)
+            .field("control", &self.control)
+            .field("template", &format_args!("{}x{}", self.template.width, self.template.height))
+            .finish()
+    }
 }
 
 /// Locate Gemini's sparkle overlay. Returns `None` if no candidate clears both gates.

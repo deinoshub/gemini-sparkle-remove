@@ -45,15 +45,18 @@ pub enum RemoveResult {
 
 const OPAQUE_CUTOFF: f64 = 0.95;
 
-/// Reverse-blend leftover is still a visible star on smooth BR (sky ~control 2,
-/// survival ~0.40). Inpaint the alpha footprint in that case only — busy
-/// texture (wood/castle) has high control and must stay reverse-blend-only.
-const SMOOTH_CONTROL: f64 = 40.0;
-const RESIDUAL_SURVIVAL: f64 = 0.20;
+/// Reverse-blend leftover is still a visible star (sky, floor, fabric, brick).
+/// Skip only when the outline is already gone (castle/dark ~0.00–0.05).
+const RESIDUAL_SURVIVAL: f64 = 0.05;
 const INPAINT_ALPHA: u8 = 1;
 const INPAINT_RADIUS: i32 = 4;
-const INPAINT_PAD: i32 = 10;
-const INPAINT_DILATE: i32 = 4;
+/// Wide dilate on smooth BR so the glow is not used as TELEA source.
+const INPAINT_PAD_SMOOTH: i32 = 10;
+const INPAINT_DILATE_SMOOTH: i32 = 4;
+/// Tight mask on busy texture so TELEA does not smear a blob.
+const INPAINT_PAD_BUSY: i32 = 3;
+const INPAINT_DILATE_BUSY: i32 = 1;
+const BUSY_CONTROL: f64 = 120.0;
 
 /// Auto-detect the Gemini sparkle and reverse-blend it in place.
 ///
@@ -81,7 +84,7 @@ pub fn remove_gemini_sparkle(img: &mut RgbaImage<'_>) -> RemoveResult {
 }
 
 fn residual_inpaint_smooth(img: &mut RgbaImage<'_>, m: &Match) {
-    if m.residual <= RESIDUAL_SURVIVAL || m.control >= SMOOTH_CONTROL {
+    if m.residual <= RESIDUAL_SURVIVAL {
         return;
     }
     let tw = m.template.width as i32;
@@ -89,7 +92,17 @@ fn residual_inpaint_smooth(img: &mut RgbaImage<'_>, m: &Match) {
     if tw == 0 || th == 0 {
         return;
     }
-    let pad = INPAINT_PAD;
+    let busy = m.control >= BUSY_CONTROL;
+    let pad = if busy {
+        INPAINT_PAD_BUSY
+    } else {
+        INPAINT_PAD_SMOOTH
+    };
+    let dilate = if busy {
+        INPAINT_DILATE_BUSY
+    } else {
+        INPAINT_DILATE_SMOOTH
+    };
     let rw = tw + pad * 2;
     let rh = th + pad * 2;
     let x0 = m.x as i32 - pad;
@@ -130,8 +143,12 @@ fn residual_inpaint_smooth(img: &mut RgbaImage<'_>, m: &Match) {
     if !any {
         return;
     }
-    let mask = dilate_mask(&seed, rw_u, rh_u, INPAINT_DILATE);
-    telea::inpaint_telea(&mut roi, &mask, rw_u, rh_u, INPAINT_RADIUS);
+    let mask = dilate_mask(&seed, rw_u, rh_u, dilate);
+    if busy {
+        fill_local_median(&mut roi, &mask, rw_u, rh_u, 6);
+    } else {
+        telea::inpaint_telea(&mut roi, &mask, rw_u, rh_u, INPAINT_RADIUS);
+    }
     for ry in 0..rh {
         let y = y0 + ry;
         if y < 0 || y >= img_h {
@@ -152,6 +169,51 @@ fn residual_inpaint_smooth(img: &mut RgbaImage<'_>, m: &Match) {
             img.data[ii + 2] = roi[oi + 2].round().clamp(0.0, 255.0) as u8;
         }
     }
+}
+
+fn fill_local_median(roi: &mut [f32], mask: &[bool], mw: usize, mh: usize, rad: i32) {
+    let src = roi.to_vec();
+    let mut rs = Vec::new();
+    let mut gs = Vec::new();
+    let mut bs = Vec::new();
+    for y in 0..mh as i32 {
+        for x in 0..mw as i32 {
+            if !mask[y as usize * mw + x as usize] {
+                continue;
+            }
+            rs.clear();
+            gs.clear();
+            bs.clear();
+            for dy in -rad..=rad {
+                for dx in -rad..=rad {
+                    let yy = y + dy;
+                    let xx = x + dx;
+                    if yy < 0 || xx < 0 || yy >= mh as i32 || xx >= mw as i32 {
+                        continue;
+                    }
+                    if mask[yy as usize * mw + xx as usize] {
+                        continue;
+                    }
+                    let o = (yy as usize * mw + xx as usize) * 3;
+                    rs.push(src[o]);
+                    gs.push(src[o + 1]);
+                    bs.push(src[o + 2]);
+                }
+            }
+            if rs.is_empty() {
+                continue;
+            }
+            let o = (y as usize * mw + x as usize) * 3;
+            roi[o] = median_f32(&mut rs);
+            roi[o + 1] = median_f32(&mut gs);
+            roi[o + 2] = median_f32(&mut bs);
+        }
+    }
+}
+
+fn median_f32(v: &mut [f32]) -> f32 {
+    v.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    v[v.len() / 2]
 }
 
 fn dilate_mask(seed: &[bool], w: usize, h: usize, r: i32) -> Vec<bool> {
